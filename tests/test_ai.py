@@ -45,6 +45,7 @@ def test_groq_json_mapping():
 
 
 def test_groq_json_unknown_category():
+    # short custom categories are allowed; oversized ones fall back to Other
     result = _to_analysis(
         {
             "is_news": True,
@@ -52,10 +53,23 @@ def test_groq_json_unknown_category():
             "summary": "Y",
             "category": "CryptoXYZ",
             "importance_score": 11,
+            "topic": "Bitcoin",
+            "why_important": "market move",
         }
     )
-    assert result.category == "Other"
+    assert result.category == "CryptoXYZ"
     assert result.importance_score == 10.0
+    assert result.topic == "Bitcoin"
+    huge = _to_analysis(
+        {
+            "is_news": True,
+            "title": "X",
+            "summary": "Y",
+            "category": "A" * 40,
+            "importance_score": 5,
+        }
+    )
+    assert huge.category == "Other"
 
 
 @pytest.mark.asyncio

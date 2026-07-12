@@ -1,37 +1,64 @@
-"""Inline keyboards for feed, detail, settings, onboarding."""
+"""Inline keyboards for Briefly."""
 
 from __future__ import annotations
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from app.bot.i18n import LANG_LABELS, SUPPORTED_LANGS, t
 
-def home_keyboard() -> InlineKeyboardMarkup:
+
+def home_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📖 Как пользоваться", callback_data="onb:0")],
+            [InlineKeyboardButton(text=f"📖 {t(lang, 'how_to')}", callback_data="onb:0")],
             [
-                InlineKeyboardButton(text="📰 Новости", callback_data="nav:news"),
-                InlineKeyboardButton(text="🔥 Тренды", callback_data="nav:trends"),
+                InlineKeyboardButton(text=f"📰 {t(lang, 'feed')}", callback_data="nav:news"),
+                InlineKeyboardButton(text=f"🔥 {t(lang, 'trends')}", callback_data="nav:trends"),
             ],
         ]
     )
 
 
-def feed_keyboard(*, offset: int, page_ids: list[int], has_more: bool) -> InlineKeyboardMarkup:
-    ids_s = ",".join(str(i) for i in page_ids) if page_ids else ""
+def language_keyboard() -> InlineKeyboardMarkup:
+    rows = []
+    row: list[InlineKeyboardButton] = []
+    for code in SUPPORTED_LANGS:
+        row.append(InlineKeyboardButton(text=LANG_LABELS[code], callback_data=f"lang:{code}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def feed_keyboard(lang: str, *, offset: int, page_ids: list[int], has_more: bool) -> InlineKeyboardMarkup:
+    if not page_ids:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=f"🏠 {t(lang, 'back_home')}", callback_data="nav:home")]
+            ]
+        )
+    ids_s = ",".join(str(i) for i in page_ids)
     rows = [
-        [
-            InlineKeyboardButton(text="📖 Подробнее", callback_data=f"feed:open:{offset}:0:{ids_s}"),
-        ]
+        [InlineKeyboardButton(text=f"📖 {t(lang, 'details')}", callback_data=f"feed:open:{offset}:0:{ids_s}")]
     ]
     if has_more:
         rows.append(
-            [InlineKeyboardButton(text="➡ Следующие новости", callback_data=f"feed:next:{offset}")]
+            [InlineKeyboardButton(text=f"➡ {t(lang, 'next_news')}", callback_data=f"feed:next:{offset}")]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def detail_keyboard(*, offset: int, index: int, total: int, news_id: int, ids_s: str) -> InlineKeyboardMarkup:
+def detail_keyboard(
+    lang: str,
+    *,
+    offset: int,
+    index: int,
+    total: int,
+    news_id: int,
+    ids_s: str,
+) -> InlineKeyboardMarkup:
     prev_i = max(0, index - 1)
     next_i = min(total - 1, index + 1)
     return InlineKeyboardMarkup(
@@ -42,68 +69,89 @@ def detail_keyboard(*, offset: int, index: int, total: int, news_id: int, ids_s:
                 InlineKeyboardButton(text="▶️", callback_data=f"feed:open:{offset}:{next_i}:{ids_s}"),
             ],
             [
-                InlineKeyboardButton(text="❤️ Интересно", callback_data=f"feed:up:{news_id}:{offset}:{index}:{ids_s}"),
-                InlineKeyboardButton(text="👎 Не интересно", callback_data=f"feed:down:{news_id}:{offset}:{index}:{ids_s}"),
-                InlineKeyboardButton(text="🔙 Назад", callback_data=f"feed:back:{offset}"),
+                InlineKeyboardButton(
+                    text=f"❤️ {t(lang, 'interesting')}",
+                    callback_data=f"feed:up:{news_id}:{offset}:{index}:{ids_s}",
+                ),
+                InlineKeyboardButton(
+                    text=f"👎 {t(lang, 'not_interesting')}",
+                    callback_data=f"feed:down:{news_id}:{offset}:{index}:{ids_s}",
+                ),
             ],
             [
-                InlineKeyboardButton(text="📡 Источники", callback_data=f"feed:src:{news_id}"),
+                InlineKeyboardButton(text=f"⭐ {t(lang, 'save')}", callback_data=f"feed:fav:{news_id}"),
+                InlineKeyboardButton(text=f"❓ {t(lang, 'why')}", callback_data=f"feed:why:{news_id}"),
+                InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data=f"feed:back:{offset}"),
+            ],
+            [
+                InlineKeyboardButton(text=f"📡 {t(lang, 'sources')}", callback_data=f"feed:src:{news_id}"),
             ],
         ]
     )
 
 
-def sources_keyboard(pairs: list[tuple[str, str]]) -> InlineKeyboardMarkup:
-    """pairs: (label, url)"""
+def history_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=t(lang, "hist_today"), callback_data="hist:d:1"),
+                InlineKeyboardButton(text=t(lang, "hist_week"), callback_data="hist:d:7"),
+                InlineKeyboardButton(text=t(lang, "hist_all"), callback_data="hist:d:0"),
+            ],
+            [InlineKeyboardButton(text=f"🔍 {t(lang, 'search')}", callback_data="hist:search")],
+        ]
+    )
+
+
+def sources_keyboard(pairs: list[tuple[str, str]], lang: str) -> InlineKeyboardMarkup:
     rows = []
     for i, (label, url) in enumerate(pairs, start=1):
         short = label[:28] + ("…" if len(label) > 28 else "")
         rows.append([InlineKeyboardButton(text=f"🔗 {i}. {short}", url=url)])
-    rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data="feed:srcback")])
+    rows.append([InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="feed:srcback")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def onboarding_keyboard(step: int, total: int) -> InlineKeyboardMarkup:
+def onboarding_keyboard(lang: str, step: int, total: int) -> InlineKeyboardMarkup:
     if step >= total - 1:
         return InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="✨ В меню", callback_data="nav:home")]]
+            inline_keyboard=[[InlineKeyboardButton(text=f"🏠 {t(lang, 'back_home')}", callback_data="nav:home")]]
         )
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="Далее →", callback_data=f"onb:{step + 1}")]]
+        inline_keyboard=[[InlineKeyboardButton(text="→", callback_data=f"onb:{step + 1}")]]
     )
 
 
-def settings_keyboard(settings) -> InlineKeyboardMarkup:
+def settings_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🕒 Частота обновления", callback_data="set:interval")],
-            [InlineKeyboardButton(text="⭐ Мин. важность", callback_data="set:min")],
-            [InlineKeyboardButton(text="📂 Категории", callback_data="set:cats")],
-            [InlineKeyboardButton(text="🔕 Игнорируемые темы", callback_data="set:ignore")],
-            [InlineKeyboardButton(text="📊 Сбросить реакции", callback_data="set:reset")],
-            [InlineKeyboardButton(text="📖 Как пользоваться", callback_data="onb:0")],
-            [InlineKeyboardButton(text="🔒 Конфиденциальность", callback_data="set:privacy")],
+            [InlineKeyboardButton(text=f"🌐 {t(lang, 'language')}", callback_data="set:lang")],
+            [InlineKeyboardButton(text="🕒", callback_data="set:interval"),
+             InlineKeyboardButton(text="⭐", callback_data="set:min"),
+             InlineKeyboardButton(text="📂", callback_data="set:cats")],
+            [InlineKeyboardButton(text="🔕", callback_data="set:ignore")],
+            [InlineKeyboardButton(text="📊", callback_data="set:reset")],
+            [InlineKeyboardButton(text=f"📖 {t(lang, 'how_to')}", callback_data="onb:0")],
+            [InlineKeyboardButton(text=f"🔒 {t(lang, 'privacy')}", callback_data="set:privacy")],
         ]
     )
 
 
-def interval_keyboard() -> InlineKeyboardMarkup:
+def interval_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="30 мин", callback_data="set:iv:30"),
-                InlineKeyboardButton(text="1 час", callback_data="set:iv:60"),
+                InlineKeyboardButton(text="30m", callback_data="set:iv:30"),
+                InlineKeyboardButton(text="1h", callback_data="set:iv:60"),
+                InlineKeyboardButton(text="6h", callback_data="set:iv:360"),
+                InlineKeyboardButton(text="1d", callback_data="set:iv:1440"),
             ],
-            [
-                InlineKeyboardButton(text="6 часов", callback_data="set:iv:360"),
-                InlineKeyboardButton(text="1 день", callback_data="set:iv:1440"),
-            ],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="set:back")],
+            [InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:back")],
         ]
     )
 
 
-def min_importance_keyboard() -> InlineKeyboardMarkup:
+def min_importance_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -112,15 +160,15 @@ def min_importance_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="5+", callback_data="set:mi:5"),
                 InlineKeyboardButton(text="7+", callback_data="set:mi:7"),
             ],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="set:back")],
+            [InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:back")],
         ]
     )
 
 
-def categories_keyboard(enabled: list[str] | None) -> InlineKeyboardMarkup:
-    enabled = enabled or []
+def categories_keyboard(lang: str, enabled: list[str] | None) -> InlineKeyboardMarkup:
     from app.services.preferences import DEFAULT_CATEGORIES
 
+    enabled = enabled or []
     rows = []
     row: list[InlineKeyboardButton] = []
     for cat in DEFAULT_CATEGORIES:
@@ -131,15 +179,15 @@ def categories_keyboard(enabled: list[str] | None) -> InlineKeyboardMarkup:
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data="set:back")])
+    rows.append([InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def channels_menu_keyboard() -> InlineKeyboardMarkup:
+def channels_menu_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="➕ Добавить списком", callback_data="ch:bulk")],
-            [InlineKeyboardButton(text="📋 Мои каналы", callback_data="ch:list")],
+            [InlineKeyboardButton(text="➕", callback_data="ch:bulk")],
+            [InlineKeyboardButton(text="📋", callback_data="ch:list")],
         ]
     )
 
@@ -155,5 +203,5 @@ def channel_list_keyboard(items: list[tuple[int, str, bool]]) -> InlineKeyboardM
                 InlineKeyboardButton(text="🗑", callback_data=f"ch:del:{channel_id}"),
             ]
         )
-    rows.append([InlineKeyboardButton(text="➕ Добавить", callback_data="ch:bulk")])
+    rows.append([InlineKeyboardButton(text="➕", callback_data="ch:bulk")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

@@ -1,5 +1,4 @@
 from app.bot.ui.texts import (
-    ONBOARDING_STEPS,
     escape,
     format_feed,
     format_home,
@@ -9,10 +8,11 @@ from app.bot.ui.texts import (
     format_settings,
     format_sources_screen,
     format_trends,
+    format_why,
+    onboarding_steps,
 )
 
 __all__ = [
-    "ONBOARDING_STEPS",
     "escape",
     "format_feed",
     "format_home",
@@ -22,4 +22,6 @@ __all__ = [
     "format_settings",
     "format_sources_screen",
     "format_trends",
+    "format_why",
+    "onboarding_steps",
 ]

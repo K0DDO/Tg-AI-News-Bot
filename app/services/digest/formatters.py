@@ -20,7 +20,7 @@ def format_news_card(news: News, *, source_count: int | None = None, index: int 
 
 
 def format_daily_header(count: int) -> str:
-    return f"🗓 <b>Новости дня</b>\nТоп-{count} по важности за последние 24 часа:"
+    return f"🗓 <b>Лента дня</b>\nТоп-{count} по важности за последние 24 часа:"
 
 
 def format_sources_list(news: News) -> str:

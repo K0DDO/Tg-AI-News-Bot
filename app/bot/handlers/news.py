@@ -1,4 +1,4 @@
-"""Single-message news feed + detail carousel."""
+"""Feed + detail carousel for Briefly."""
 
 from __future__ import annotations
 
@@ -8,23 +8,24 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.keyboards import (
-    BTN_NEWS,
-    detail_keyboard,
-    feed_keyboard,
-    sources_keyboard,
-)
-from app.bot.ui import format_feed, format_news_detail, format_sources_screen
+from app.bot.i18n import t
+from app.bot.keyboards import detail_keyboard, feed_keyboard, sources_keyboard
+from app.bot.ui import format_feed, format_news_detail, format_sources_screen, format_why
 from app.config import get_settings
 from app.models import User
 from app.services.digest import NewsService
 from app.services.preferences import FeedService, PreferencesService
 from app.services.reactions import ReactionService
+from app.services.translation import ensure_translation
 
 router = Router(name="news")
 
 
-async def _render_feed(
+async def _lang(session: AsyncSession, user: User) -> str:
+    return await PreferencesService(session).lang(user)
+
+
+async def open_feed(
     target: Message,
     session: AsyncSession,
     user: User,
@@ -32,17 +33,35 @@ async def _render_feed(
     offset: int = 0,
     edit: bool = False,
 ) -> None:
+    lang = await _lang(session, user)
     settings = get_settings()
     limit = settings.digest_default_limit
-    feed = FeedService(session)
-    items = await feed.get_feed(user, limit=limit, offset=offset)
-    text = format_feed(items, offset=offset)
+    items, total = await FeedService(session).get_feed(user, limit=limit, offset=offset)
+    for n in items:
+        await ensure_translation(session, n, lang)
+    if not items and offset == 0:
+        from sqlalchemy import func, select
+
+        from app.models import UserChannel
+
+        n_ch = await session.scalar(
+            select(func.count()).select_from(UserChannel).where(
+                UserChannel.user_id == user.id,
+                UserChannel.is_active.is_(True),
+            )
+        )
+        if not n_ch:
+            text = f"📂 {t(lang, 'no_channels_feed')}"
+        else:
+            text = format_feed(lang, items)
+    else:
+        text = format_feed(lang, items)
     ids = [n.id for n in items]
-    has_more = len(items) == limit
-    kb = feed_keyboard(offset=offset, page_ids=ids, has_more=has_more and bool(items))
+    has_more = offset + len(items) < total and bool(items)
+    kb = feed_keyboard(lang, offset=offset, page_ids=ids, has_more=has_more)
 
     prefs = PreferencesService(session)
-    if edit and target.message_id:
+    if edit and getattr(target, "message_id", None):
         try:
             await target.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
             await prefs.save_digest_message(user, target.chat.id, target.message_id)
@@ -50,9 +69,8 @@ async def _render_feed(
         except TelegramBadRequest:
             pass
 
-    # try edit stored digest message
     us = await prefs.get_or_create(user)
-    if us.digest_chat_id and us.digest_message_id and target.bot:
+    if us.digest_chat_id and us.digest_message_id and target.bot and not edit:
         try:
             await target.bot.edit_message_text(
                 chat_id=us.digest_chat_id,
@@ -69,33 +87,34 @@ async def _render_feed(
     await prefs.save_digest_message(user, sent.chat.id, sent.message_id)
 
 
-@router.message(F.text == BTN_NEWS)
-@router.message(Command("digest", "daily", "news"))
+@router.message(Command("digest", "daily", "news", "feed"))
 @router.callback_query(F.data == "nav:news")
-async def open_news(event: Message | CallbackQuery, session: AsyncSession, db_user: User) -> None:
+async def cmd_feed(event: Message | CallbackQuery, session: AsyncSession, db_user: User) -> None:
     if isinstance(event, CallbackQuery):
         await event.answer()
-        msg = event.message
-        if not msg:
-            return
-        await _render_feed(msg, session, db_user, offset=0)
+        if event.message:
+            await open_feed(event.message, session, db_user, offset=0)
         return
-    await _render_feed(event, session, db_user, offset=0)
+    await open_feed(event, session, db_user, offset=0)
 
 
 @router.callback_query(F.data.startswith("feed:next:"))
 async def feed_next(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     offset = int(callback.data.split(":")[2])
-    settings = get_settings()
-    offset += settings.digest_default_limit
+    limit = get_settings().digest_default_limit
+    offset += limit
     await callback.answer()
     if not callback.message:
         return
-    items = await FeedService(session).get_feed(db_user, limit=settings.digest_default_limit, offset=offset)
+    items, total = await FeedService(session).get_feed(db_user, limit=limit, offset=offset)
     if not items:
-        await callback.message.edit_text("На данный момент это все новые новости 🎉")
+        lang = await _lang(session, db_user)
+        await callback.message.edit_text(
+            f"🎉 {t(lang, 'no_more_news')}",
+            reply_markup=feed_keyboard(lang, offset=offset, page_ids=[], has_more=False),
+        )
         return
-    await _render_feed(callback.message, session, db_user, offset=offset, edit=True)
+    await open_feed(callback.message, session, db_user, offset=offset, edit=True)
 
 
 @router.callback_query(F.data.startswith("feed:back:"))
@@ -103,34 +122,28 @@ async def feed_back(callback: CallbackQuery, session: AsyncSession, db_user: Use
     offset = int(callback.data.split(":")[2])
     await callback.answer()
     if callback.message:
-        await _render_feed(callback.message, session, db_user, offset=offset, edit=True)
+        await open_feed(callback.message, session, db_user, offset=offset, edit=True)
 
 
 @router.callback_query(F.data.startswith("feed:open:"))
 async def feed_open(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
-    # feed:open:{offset}:{index}:{ids}
     parts = callback.data.split(":")
-    offset = int(parts[2])
-    index = int(parts[3])
-    ids_s = parts[4] if len(parts) > 4 else ""
+    offset, index, ids_s = int(parts[2]), int(parts[3]), parts[4] if len(parts) > 4 else ""
     ids = [int(x) for x in ids_s.split(",") if x]
     await callback.answer()
     if not ids or not callback.message:
         return
     index = max(0, min(index, len(ids) - 1))
+    lang = await _lang(session, db_user)
     news = await NewsService(session).get_news(ids[index])
     if not news:
         return
+    await ensure_translation(session, news, lang)
     await FeedService(session).mark_read(db_user, news)
-    text = format_news_detail(news, index=index + 1, total=len(ids))
     await callback.message.edit_text(
-        text,
+        format_news_detail(lang, news, index=index + 1, total=len(ids)),
         reply_markup=detail_keyboard(
-            offset=offset,
-            index=index,
-            total=len(ids),
-            news_id=news.id,
-            ids_s=ids_s,
+            lang, offset=offset, index=index, total=len(ids), news_id=news.id, ids_s=ids_s
         ),
         disable_web_page_preview=True,
     )
@@ -138,69 +151,83 @@ async def feed_open(callback: CallbackQuery, session: AsyncSession, db_user: Use
 
 @router.callback_query(F.data.startswith("feed:up:"))
 async def feed_up(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
-    # feed:up:{news_id}:{offset}:{index}:{ids}
-    parts = callback.data.split(":")
-    news_id = int(parts[2])
+    news_id = int(callback.data.split(":")[2])
     await ReactionService(session).mark_interesting(db_user.id, news_id)
     news = await NewsService(session).get_news(news_id)
     if news:
         await FeedService(session).mark_read(db_user, news)
-    await callback.answer("Сохранено ❤️")
+    lang = await _lang(session, db_user)
+    await callback.answer(t(lang, "interesting"))
 
 
 @router.callback_query(F.data.startswith("feed:down:"))
 async def feed_down(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     parts = callback.data.split(":")
-    news_id = int(parts[2])
-    offset = int(parts[3])
-    index = int(parts[4])
+    news_id, offset, index = int(parts[2]), int(parts[3]), int(parts[4])
     ids_s = parts[5] if len(parts) > 5 else ""
     ids = [int(x) for x in ids_s.split(",") if x]
     await ReactionService(session).mark_not_interesting(db_user.id, news_id)
     news = await NewsService(session).get_news(news_id)
     if news:
         await FeedService(session).dislike(db_user, news)
-    await callback.answer("Скрыто 👎")
-    # jump to next or back to feed
+    lang = await _lang(session, db_user)
+    await callback.answer(t(lang, "not_interesting"))
     if not callback.message:
         return
     remaining = [i for i in ids if i != news_id]
     if not remaining:
-        await _render_feed(callback.message, session, db_user, offset=offset, edit=True)
+        await open_feed(callback.message, session, db_user, offset=offset, edit=True)
         return
     new_index = min(index, len(remaining) - 1)
     ids_s2 = ",".join(str(i) for i in remaining)
     n2 = await NewsService(session).get_news(remaining[new_index])
     if not n2:
         return
+    await ensure_translation(session, n2, lang)
     await FeedService(session).mark_read(db_user, n2)
     await callback.message.edit_text(
-        format_news_detail(n2, index=new_index + 1, total=len(remaining)),
+        format_news_detail(lang, n2, index=new_index + 1, total=len(remaining)),
         reply_markup=detail_keyboard(
-            offset=offset,
-            index=new_index,
-            total=len(remaining),
-            news_id=n2.id,
-            ids_s=ids_s2,
+            lang, offset=offset, index=new_index, total=len(remaining), news_id=n2.id, ids_s=ids_s2
         ),
         disable_web_page_preview=True,
     )
 
 
-@router.callback_query(F.data.startswith("feed:src:"))
-async def feed_sources(callback: CallbackQuery, session: AsyncSession) -> None:
+@router.callback_query(F.data.startswith("feed:fav:"))
+async def feed_fav(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     news_id = int(callback.data.split(":")[2])
     news = await NewsService(session).get_news(news_id)
+    lang = await _lang(session, db_user)
+    if not news:
+        await callback.answer()
+        return
+    saved = await FeedService(session).toggle_favorite(db_user, news)
+    await callback.answer(t(lang, "saved") if saved else t(lang, "save"))
+
+
+@router.callback_query(F.data.startswith("feed:why:"))
+async def feed_why(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    news_id = int(callback.data.split(":")[2])
+    news = await NewsService(session).get_news(news_id)
+    lang = await _lang(session, db_user)
+    await callback.answer()
+    if news and callback.message:
+        await callback.message.answer(format_why(lang, news))
+
+
+@router.callback_query(F.data.startswith("feed:src:"))
+async def feed_sources(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    news_id = int(callback.data.split(":")[2])
+    news = await NewsService(session).get_news(news_id)
+    lang = await _lang(session, db_user)
     await callback.answer()
     if not news or not callback.message:
         return
-    pairs = []
-    for src in news.sources or []:
-        label = src.channel_title or "Источник"
-        pairs.append((label, src.source_url))
+    pairs = [(src.channel_title or "Source", src.source_url) for src in (news.sources or [])]
     await callback.message.answer(
-        format_sources_screen(news),
-        reply_markup=sources_keyboard(pairs),
+        format_sources_screen(lang, news),
+        reply_markup=sources_keyboard(pairs, lang),
         disable_web_page_preview=True,
     )
 

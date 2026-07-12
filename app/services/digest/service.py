@@ -62,7 +62,13 @@ class NewsService:
         self._threshold = settings.cluster_similarity_threshold
         self._lookback_hours = settings.cluster_lookback_hours
 
-    async def process_message(self, message: Message, *, channel_title: str | None = None) -> ProcessResult:
+    async def process_message(
+        self,
+        message: Message,
+        *,
+        channel_title: str | None = None,
+        channel_username: str | None = None,
+    ) -> ProcessResult:
         result = self._filter.evaluate(message.text)
         if not result.passed:
             message.status = MessageStatus.FILTERED_OUT.value
@@ -84,6 +90,7 @@ class NewsService:
                 news_id=assignment.news_id,
                 message=message,
                 channel_title=channel_title,
+                channel_username=channel_username,
                 embedding=embedding,
             )
             return ProcessResult(news=news, action="merged")
@@ -109,7 +116,10 @@ class NewsService:
             title=analysis.title,
             summary=analysis.summary,
             category=analysis.category,
+            topic=analysis.topic,
+            why_important=analysis.why_important,
             importance_score=Decimal(str(analysis.importance_score)),
+            sources_count=1,
             embedding=list(embedding),
         )
         self._session.add(news)
@@ -121,6 +131,7 @@ class NewsService:
                 message_id=message.id,
                 source_url=message.url,
                 channel_title=channel_title,
+                channel_username=channel_username,
             )
         )
         message.status = MessageStatus.PROCESSED.value
@@ -133,6 +144,7 @@ class NewsService:
         news_id: int,
         message: Message,
         channel_title: str | None,
+        channel_username: str | None,
         embedding: list[float],
     ) -> News:
         news = await self._session.get(
@@ -148,6 +160,7 @@ class NewsService:
                 message_id=message.id,
                 source_url=message.url,
                 channel_title=channel_title,
+                channel_username=channel_username,
             )
         )
         message.status = MessageStatus.PROCESSED.value
@@ -157,7 +170,7 @@ class NewsService:
 
         await self._session.flush()
         await self.rescore_news(news.id)
-        await self._session.refresh(news, attribute_names=["sources", "importance_score"])
+        await self._session.refresh(news, attribute_names=["sources", "importance_score", "sources_count"])
         return news
 
     async def _load_candidates(self) -> list[ClusterCandidate]:
@@ -213,6 +226,17 @@ class NewsService:
         # Prefer max of AI score and heuristic, plus mild source boost on AI score
         score = round(min(10.0, max(base + source_boost, heuristic)), 2)
         news.importance_score = Decimal(str(score))
+        news.sources_count = len(news.sources or [])
+        # Refresh why_important lightly without extra AI call
+        if news.sources_count > 1:
+            base_why = news.why_important or ""
+            marker = f"{news.sources_count} источников"
+            if marker not in base_why:
+                news.why_important = (
+                    f"{base_why}; {marker}".strip("; ")
+                    if base_why
+                    else f"Подтверждено {news.sources_count} источниками"
+                )
         await self._session.flush()
         return score
 
@@ -256,13 +280,14 @@ class NewsService:
         *,
         limit: int = 8,
         lookback_days: int = 30,
+        since: datetime | None = None,
     ) -> list[tuple[News, float]]:
         query_vec = self._embedding.embed_one(query)
-        since = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+        cutoff = since or (datetime.now(timezone.utc) - timedelta(days=lookback_days))
         result = await self._session.execute(
             select(News)
             .options(selectinload(News.sources))
-            .where(News.created_at >= since)
+            .where(News.created_at >= cutoff)
             .order_by(News.created_at.desc())
             .limit(500)
         )

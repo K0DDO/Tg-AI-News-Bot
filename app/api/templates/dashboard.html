@@ -1,19 +1,19 @@
 {% extends "base.html" %}
-{% block title %}Dashboard — TG News Admin{% endblock %}
+{% block title %}Dashboard — Briefly Admin{% endblock %}
 {% block content %}
-  <h1>TG News Aggregator</h1>
+  <h1>Briefly</h1>
   <p class="sub">Админка каналов и статистики</p>
 
   <div class="grid">
     <div class="stat"><strong>{{ stats.channels }}</strong><span>Каналы</span></div>
     <div class="stat"><strong>{{ stats.messages }}</strong><span>Сообщения</span></div>
     <div class="stat"><strong>{{ stats.processed_messages }}</strong><span>Обработано</span></div>
-    <div class="stat"><strong>{{ stats.news }}</strong><span>Новости</span></div>
+    <div class="stat"><strong>{{ stats.news }}</strong><span>Лента</span></div>
     <div class="stat"><strong>{{ stats.sources }}</strong><span>Источники</span></div>
     <div class="stat"><strong>{{ stats.filtered_messages }}</strong><span>Отфильтровано</span></div>
-    <div class="stat"><strong>{{ stats.ai_requests }}</strong><span>AI запросов</span></div>
-    <div class="stat"><strong>{{ stats.ai_analyze }}</strong><span>AI анализ</span></div>
-    <div class="stat"><strong>{{ stats.ai_search }}</strong><span>AI поиск</span></div>
+    <div class="stat"><strong>{{ stats.ai_requests }}</strong><span>Обработка</span></div>
+    <div class="stat"><strong>{{ stats.ai_analyze }}</strong><span>Анализ</span></div>
+    <div class="stat"><strong>{{ stats.ai_search }}</strong><span>Поиск</span></div>
     <div class="stat"><strong>{{ stats.users }}</strong><span>Пользователи</span></div>
   </div>
 

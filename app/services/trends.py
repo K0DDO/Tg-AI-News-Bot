@@ -1,9 +1,9 @@
-"""Trend topics from clustered news (unique sources + mentions)."""
+"""Topic-based trends (not bag-of-words)."""
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,35 +11,65 @@ from sqlalchemy.orm import selectinload
 
 from app.models import News
 
-_TOKEN = re.compile(r"[A-Za-zА-Яа-яёЁ0-9][A-Za-zА-Яа-яёЁ0-9\-+]{2,}")
-_STOP = {
-    "это", "что", "как", "для", "или", "при", "был", "была", "были", "есть",
-    "the", "and", "for", "with", "new", "news", "сегодня", "также", "после",
-}
-
 
 class TrendsService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def top_topics(self, *, limit: int = 10) -> list[tuple[str, int]]:
+    async def top_topics(self, *, limit: int = 10) -> list[dict]:
+        """
+        Returns list of dicts:
+        topic, sources, news_count, growth_today
+        """
+        now = datetime.now(timezone.utc)
+        day_ago = now - timedelta(hours=24)
         result = await self._session.execute(
-            select(News).options(selectinload(News.sources)).order_by(News.updated_at.desc()).limit(300)
+            select(News)
+            .options(selectinload(News.sources))
+            .where(News.topic.is_not(None))
+            .order_by(News.updated_at.desc())
+            .limit(500)
         )
-        scores: dict[str, set[int]] = defaultdict(set)
+        by_topic: dict[str, list[News]] = defaultdict(list)
         for news in result.scalars().all():
-            text = f"{news.title} {news.summary}"
-            tokens = {t.lower() for t in _TOKEN.findall(text) if t.lower() not in _STOP}
-            # Prefer capitalized / brand-like tokens from title
-            title_tokens = [t for t in _TOKEN.findall(news.title) if t.lower() not in _STOP]
-            focus = title_tokens[:4] or list(tokens)[:4]
-            for token in focus:
-                key = token if token.isupper() or token[:1].isupper() else token.lower()
-                if len(key) < 3:
-                    continue
-                for src in news.sources or []:
-                    scores[key].add(src.id)
-                if not news.sources:
-                    scores[key].add(news.id)
-        ranked = sorted(((k, len(v)) for k, v in scores.items()), key=lambda x: x[1], reverse=True)
-        return ranked[:limit]
+            topic = (news.topic or "").strip()
+            if len(topic) < 2:
+                continue
+            # normalize key case-insensitively but keep display form
+            key = topic
+            by_topic[key].append(news)
+
+        # merge case variants
+        merged: dict[str, list[News]] = {}
+        for topic, items in by_topic.items():
+            found = None
+            for existing in merged:
+                if existing.lower() == topic.lower():
+                    found = existing
+                    break
+            if found:
+                merged[found].extend(items)
+            else:
+                merged[topic] = list(items)
+
+        rows: list[dict] = []
+        for topic, items in merged.items():
+            source_ids: set[int] = set()
+            growth = 0
+            for n in items:
+                for s in n.sources or []:
+                    source_ids.add(s.id)
+                if not n.sources:
+                    source_ids.add(n.id)
+                if n.updated_at and n.updated_at >= day_ago:
+                    growth += max(1, n.sources_count or len(n.sources or []))
+            rows.append(
+                {
+                    "topic": topic,
+                    "sources": len(source_ids),
+                    "news_count": len(items),
+                    "growth_today": growth,
+                }
+            )
+        rows.sort(key=lambda r: (r["sources"], r["growth_today"], r["news_count"]), reverse=True)
+        return rows[:limit]

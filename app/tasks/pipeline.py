@@ -91,7 +91,12 @@ async def run_ingest_cycle() -> dict[str, int]:
             for message in raw_messages:
                 channel = await session.get(Channel, message.channel_id)
                 title = channel.title if channel else None
-                result = await news_service.process_message(message, channel_title=title)
+                username = channel.username if channel else None
+                result = await news_service.process_message(
+                    message,
+                    channel_title=title,
+                    channel_username=username,
+                )
                 if result.action == "filtered":
                     filtered += 1
                 elif result.action == "merged":

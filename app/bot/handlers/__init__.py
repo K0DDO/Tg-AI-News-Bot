@@ -1,6 +1,6 @@
 from aiogram import Router
 
-from app.bot.handlers import channels, home, news, search, settings, trends
+from app.bot.handlers import channels, home, library, news, search, settings, trends
 
 
 def setup_routers() -> Router:
@@ -11,4 +11,5 @@ def setup_routers() -> Router:
     root.include_router(channels.router)
     root.include_router(settings.router)
     root.include_router(trends.router)
+    root.include_router(library.router)
     return root

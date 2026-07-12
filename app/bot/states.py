@@ -5,6 +5,10 @@ class SearchStates(StatesGroup):
     waiting_query = State()
 
 
+class HistoryStates(StatesGroup):
+    waiting_query = State()
+
+
 class ChannelBulkStates(StatesGroup):
     waiting_list = State()
 

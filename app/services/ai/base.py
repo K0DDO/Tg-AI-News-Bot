@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, Sequence
 
 
@@ -25,12 +25,21 @@ class NewsAnalysisResult:
     category: str
     importance_score: float
     reason: str | None = None
+    topic: str | None = None
+    why_important: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class SearchAnswer:
     answer: str
     used_news_ids: tuple[int, ...] = ()
+    relevant: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class TranslationResult:
+    title: str
+    summary: str
 
 
 class AIService(Protocol):
@@ -45,7 +54,6 @@ class AIService(Protocol):
         source_count: int = 1,
         channel_title: str | None = None,
     ) -> NewsAnalysisResult:
-        """Classify + title + summary + category + importance for a new message."""
         ...
 
     async def answer_search(
@@ -54,9 +62,18 @@ class AIService(Protocol):
         contexts: Sequence[tuple[int, str, str]],
     ) -> SearchAnswer:
         """
-        Answer a user query using retrieved news contexts.
-        contexts: sequence of (news_id, title, summary).
+        Answer using ONLY provided contexts.
+        If none are relevant, relevant=False and a honest empty message.
         """
+        ...
+
+    async def translate_news(
+        self,
+        *,
+        title: str,
+        summary: str,
+        target_lang: str,
+    ) -> TranslationResult:
         ...
 
     async def close(self) -> None:

@@ -1,71 +1,62 @@
-"""Perplexity-style semantic search UX."""
+"""Strict search UX for Briefly."""
 
 from __future__ import annotations
 
-from aiogram import F, Router
+from aiogram import Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.keyboards import BTN_SEARCH, detail_keyboard
+from app.bot.i18n import t
 from app.bot.states import SearchStates
-from app.bot.ui import format_news_detail, format_search_answer
+from app.bot.ui import format_search_answer
 from app.models import User
-from app.services.digest import NewsService
+from app.services.preferences import PreferencesService
 from app.services.search import SemanticSearch
+from app.services.translation import ensure_translation
 
 router = Router(name="search")
 
 
-@router.message(F.text == BTN_SEARCH)
-@router.message(Command("search"))
-async def ask_search(message: Message, state: FSMContext) -> None:
-    await state.set_state(SearchStates.waiting_query)
+async def ask_search(message: Message, session: AsyncSession, db_user: User) -> None:
+    # used by home reply routing — needs state
+    from aiogram.fsm.context import FSMContext
+    # This will be called without state from home — set via wrapper
+    lang = await PreferencesService(session).lang(db_user)
     await message.answer(
-        "<b>🔍 Поиск</b>\n\n"
-        "Что хотите найти?\n\n"
-        "<i>Например:</i>\n"
-        "• новости про iPhone 17 Pro\n"
-        "• что нового по NVIDIA\n"
-        "• лучшие нейросети для блогеров"
+        f"<b>🔍 {t(lang, 'search')}</b>\n\n"
+        f"{t(lang, 'search_ask')}\n\n"
+        f"<i>{t(lang, 'search_examples')}</i>"
     )
 
 
+@router.message(Command("search"))
+async def cmd_search(message: Message, state: FSMContext, session: AsyncSession, db_user: User) -> None:
+    await state.set_state(SearchStates.waiting_query)
+    await ask_search(message, session, db_user)
+
+
 @router.message(SearchStates.waiting_query)
-async def run_search(message: Message, session: AsyncSession, state: FSMContext) -> None:
+async def run_search(message: Message, session: AsyncSession, state: FSMContext, db_user: User) -> None:
     query = (message.text or "").strip()
     await state.clear()
+    lang = await PreferencesService(session).lang(db_user)
     if not query or query.startswith("/"):
-        await message.answer("Введите текстовый запрос.")
         return
 
-    wait = await message.answer("Ищу…")
-    answer, hits = await SemanticSearch(session).search_with_answer(query, limit=6)
+    wait = await message.answer(t(lang, "searching"))
+    answer, _hits, used_news = await SemanticSearch(session).search_with_answer(
+        query,
+        limit=8,
+        empty_message=t(lang, "search_empty"),
+    )
     await session.commit()
+    for n in used_news:
+        await ensure_translation(session, n, lang)
 
+    text = format_search_answer(lang, answer, used_news)
     try:
-        await wait.edit_text(format_search_answer(answer, hits), disable_web_page_preview=True)
+        await wait.edit_text(text, disable_web_page_preview=True)
     except Exception:
-        await message.answer(format_search_answer(answer, hits), disable_web_page_preview=True)
-
-    if not hits:
-        return
-
-    # compact open first source as optional detail buttons via separate short list
-    news_service = NewsService(session)
-    ids = [h.news_id for h in hits[:5]]
-    ids_s = ",".join(str(i) for i in ids)
-    first = await news_service.get_news(ids[0])
-    if first:
-        await message.answer(
-            format_news_detail(first, index=1, total=len(ids)),
-            reply_markup=detail_keyboard(
-                offset=0,
-                index=0,
-                total=len(ids),
-                news_id=first.id,
-                ids_s=ids_s,
-            ),
-            disable_web_page_preview=True,
-        )
+        await message.answer(text, disable_web_page_preview=True)

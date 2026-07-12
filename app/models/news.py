@@ -6,6 +6,7 @@ from sqlalchemy import (
     JSON,
     DateTime,
     ForeignKey,
+    Integer,
     Numeric,
     String,
     Text,
@@ -25,6 +26,8 @@ class News(Base):
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
     category: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    topic: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    why_important: Mapped[str | None] = mapped_column(Text, nullable=True)
     importance_score: Mapped[Decimal] = mapped_column(
         Numeric(4, 2),
         default=Decimal("0"),
@@ -32,7 +35,10 @@ class News(Base):
         nullable=False,
         index=True,
     )
+    sources_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     embedding: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    title_i18n: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    summary_i18n: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -57,18 +63,21 @@ class News(Base):
         cascade="all, delete-orphan",
     )
 
+    def localized_title(self, lang: str) -> str:
+        if lang and self.title_i18n and lang in self.title_i18n:
+            return str(self.title_i18n[lang])
+        return self.title
+
+    def localized_summary(self, lang: str) -> str:
+        if lang and self.summary_i18n and lang in self.summary_i18n:
+            return str(self.summary_i18n[lang])
+        return self.summary
+
     def __repr__(self) -> str:
         return f"<News id={self.id} title={self.title[:40]!r} score={self.importance_score}>"
 
 
 class NewsSource(Base):
-    """
-    Link between a News cluster and an original Message.
-
-    source_url / channel_title are denormalized so cleanup can delete
-    old Message rows without breaking digest "Sources" links.
-    """
-
     __tablename__ = "news_sources"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -84,6 +93,7 @@ class NewsSource(Base):
     )
     source_url: Mapped[str] = mapped_column(String(1024), nullable=False)
     channel_title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    channel_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
