@@ -28,6 +28,12 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    settings = relationship(
+        "UserSettings",
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
         return f"<User id={self.id} telegram_id={self.telegram_id}>"

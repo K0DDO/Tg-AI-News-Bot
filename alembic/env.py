@@ -16,6 +16,8 @@ from app.models import (  # noqa: F401 — register models on metadata
     Reaction,
     User,
     UserChannel,
+    UserNewsState,
+    UserSettings,
 )
 
 config = context.config

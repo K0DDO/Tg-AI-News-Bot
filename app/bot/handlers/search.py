@@ -1,52 +1,71 @@
-from aiogram import Router
+"""Perplexity-style semantic search UX."""
+
+from __future__ import annotations
+
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.keyboards import news_keyboard
+from app.bot.keyboards import BTN_SEARCH, detail_keyboard
 from app.bot.states import SearchStates
-from app.services.digest import format_news_card
-from app.services.digest.service import NewsService
+from app.bot.ui import format_news_detail, format_search_answer
+from app.models import User
+from app.services.digest import NewsService
 from app.services.search import SemanticSearch
 
 router = Router(name="search")
 
 
+@router.message(F.text == BTN_SEARCH)
 @router.message(Command("search"))
-async def cmd_search(message: Message, state: FSMContext) -> None:
+async def ask_search(message: Message, state: FSMContext) -> None:
     await state.set_state(SearchStates.waiting_query)
     await message.answer(
-        "Задай вопрос по смыслу, например:\n"
-        "• Что нового было про NVIDIA?\n"
-        "• Какие нейросети появились для блогеров?"
+        "<b>🔍 Поиск</b>\n\n"
+        "Что хотите найти?\n\n"
+        "<i>Например:</i>\n"
+        "• новости про iPhone 17 Pro\n"
+        "• что нового по NVIDIA\n"
+        "• лучшие нейросети для блогеров"
     )
 
 
 @router.message(SearchStates.waiting_query)
-async def search_query(message: Message, session: AsyncSession, state: FSMContext) -> None:
+async def run_search(message: Message, session: AsyncSession, state: FSMContext) -> None:
     query = (message.text or "").strip()
     await state.clear()
-    if not query:
-        await message.answer("Пустой запрос.")
+    if not query or query.startswith("/"):
+        await message.answer("Введите текстовый запрос.")
         return
 
-    await message.answer("Ищу…")
-    search = SemanticSearch(session)
-    answer, hits = await search.search_with_answer(query, limit=6)
+    wait = await message.answer("Ищу…")
+    answer, hits = await SemanticSearch(session).search_with_answer(query, limit=6)
     await session.commit()
 
-    await message.answer(answer)
+    try:
+        await wait.edit_text(format_search_answer(answer, hits), disable_web_page_preview=True)
+    except Exception:
+        await message.answer(format_search_answer(answer, hits), disable_web_page_preview=True)
+
     if not hits:
         return
 
+    # compact open first source as optional detail buttons via separate short list
     news_service = NewsService(session)
-    for hit in hits[:5]:
-        news = await news_service.get_news(hit.news_id)
-        if not news:
-            continue
+    ids = [h.news_id for h in hits[:5]]
+    ids_s = ",".join(str(i) for i in ids)
+    first = await news_service.get_news(ids[0])
+    if first:
         await message.answer(
-            format_news_card(news),
-            reply_markup=news_keyboard(news.id),
+            format_news_detail(first, index=1, total=len(ids)),
+            reply_markup=detail_keyboard(
+                offset=0,
+                index=0,
+                total=len(ids),
+                news_id=first.id,
+                ids_s=ids_s,
+            ),
             disable_web_page_preview=True,
         )

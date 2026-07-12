@@ -5,9 +5,12 @@ from app.models.message import Message
 from app.models.news import News, NewsSource
 from app.models.reaction import Reaction
 from app.models.user import User
+from app.models.user_prefs import UserNewsState, UserSettings
 
 __all__ = [
     "User",
+    "UserSettings",
+    "UserNewsState",
     "Channel",
     "UserChannel",
     "Message",

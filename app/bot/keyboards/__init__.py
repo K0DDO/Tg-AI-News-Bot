@@ -1,3 +1,41 @@
-from app.bot.keyboards.inline import channels_keyboard, news_keyboard
+from app.bot.keyboards.inline import (
+    categories_keyboard,
+    channel_list_keyboard,
+    channels_menu_keyboard,
+    detail_keyboard,
+    feed_keyboard,
+    home_keyboard,
+    interval_keyboard,
+    min_importance_keyboard,
+    onboarding_keyboard,
+    settings_keyboard,
+    sources_keyboard,
+)
+from app.bot.keyboards.reply import (
+    BTN_CHANNELS,
+    BTN_NEWS,
+    BTN_SEARCH,
+    BTN_SETTINGS,
+    BTN_TRENDS,
+    main_menu,
+)
 
-__all__ = ["news_keyboard", "channels_keyboard"]
+__all__ = [
+    "main_menu",
+    "BTN_NEWS",
+    "BTN_SEARCH",
+    "BTN_CHANNELS",
+    "BTN_SETTINGS",
+    "BTN_TRENDS",
+    "home_keyboard",
+    "feed_keyboard",
+    "detail_keyboard",
+    "sources_keyboard",
+    "onboarding_keyboard",
+    "settings_keyboard",
+    "interval_keyboard",
+    "min_importance_keyboard",
+    "categories_keyboard",
+    "channels_menu_keyboard",
+    "channel_list_keyboard",
+]
