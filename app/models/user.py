@@ -17,6 +17,7 @@ class User(Base):
         server_default=func.now(),
         nullable=False,
     )
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     channels = relationship(
         "UserChannel",

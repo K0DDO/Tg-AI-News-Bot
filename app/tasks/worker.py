@@ -8,7 +8,7 @@ import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.config import get_settings
-from app.tasks.pipeline import run_cleanup, run_ingest_cycle
+from app.tasks.pipeline import run_cleanup, run_ingest_cycle, run_kg_maintenance
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,14 @@ async def run_worker() -> None:
         "interval",
         hours=6,
         id="cleanup",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        run_kg_maintenance,
+        "interval",
+        hours=2,
+        id="kg_maintenance",
         max_instances=1,
         coalesce=True,
     )

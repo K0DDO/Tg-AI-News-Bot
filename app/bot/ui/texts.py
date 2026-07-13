@@ -8,6 +8,7 @@ from app.bot.i18n import t
 from app.models import Event
 from app.services.events.brief import Brief, BriefBuilderService
 from app.utils.relative_dates import resolve_relative_dates
+from app.utils.title_case import normalize_title
 
 CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩"
 _builder = BriefBuilderService()
@@ -28,26 +29,56 @@ def circled(n: int) -> str:
     return f"{n}."
 
 
-def to_brief(event: Event, lang: str) -> Brief:
-    return _builder.build(event, lang=lang)
+def format_meta_line(
+    *,
+    score: float,
+    category: str,
+    sources: int,
+    posts: int,
+    first_seen: datetime | None = None,
+) -> str:
+    line = f"⭐️ {score:.1f}/10 • 📂 {escape(category)} • 📡 {sources} • 📰 {posts}"
+    if first_seen is not None:
+        ts = first_seen
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        line += f" • 🗓 {ts.strftime('%d.%m')}"
+    return line
 
 
-def format_home(lang: str, *, messages: int, news: int, avg_importance: float, last_update: datetime | None) -> str:
+def to_brief(event: Event, lang: str, *, show_summary: bool = True) -> Brief:
+    return _builder.build(event, lang=lang, show_summary=show_summary)
+
+
+def format_home(
+    lang: str,
+    *,
+    messages: int | None = None,
+    news: int | None = None,
+    avg_importance: float | None = None,
+    last_update: datetime | None = None,
+    read: int = 0,
+    saved: int = 0,
+    liked: int = 0,
+) -> str:
     if last_update is None:
         updated = "—"
     else:
         if last_update.tzinfo is None:
             last_update = last_update.replace(tzinfo=timezone.utc)
         updated = last_update.astimezone().strftime("%d.%m %H:%M")
-    return (
-        f"<b>📰 {t(lang, 'brand')}</b>\n\n"
-        f"{t(lang, 'welcome')}\n\n"
-        f"<b>{t(lang, 'today_stats')}</b>\n"
-        f"📨 {t(lang, 'messages')}: <b>{messages}</b>\n"
-        f"📰 {t(lang, 'news_count')}: <b>{news}</b>\n"
-        f"⭐ {t(lang, 'avg_score')}: <b>{avg_importance:.1f}</b>\n"
-        f"🕒 {t(lang, 'updated')}: <b>{updated}</b>"
-    )
+    lines = [
+        f"<b>📰 {t(lang, 'brand')}</b>",
+        "",
+        t(lang, "welcome"),
+        "",
+        f"<b>{t(lang, 'your_stats')}</b>",
+        f"👁 {t(lang, 'stat_read')}: <b>{read}</b>",
+        f"⭐ {t(lang, 'stat_saved')}: <b>{saved}</b>",
+        f"❤️ {t(lang, 'stat_liked')}: <b>{liked}</b>",
+        f"🕒 {t(lang, 'updated')}: <b>{updated}</b>",
+    ]
+    return "\n".join(lines)
 
 
 def format_feed(
@@ -56,8 +87,11 @@ def format_feed(
     *,
     title_key: str = "feed_title",
     empty_key: str = "no_more_news",
+    empty_plain: str | None = None,
 ) -> str:
     if not items:
+        if empty_plain:
+            return empty_plain
         return f"🎉 {t(lang, empty_key)}"
     briefs: list[Brief] = []
     for item in items:
@@ -69,30 +103,57 @@ def format_feed(
     for i, brief in enumerate(briefs, start=1):
         badge = f"  📈 {t(lang, 'updated_badge')}" if brief.updated else ""
         lines.append(f"{circled(i)} <b>{escape(brief.title)}</b>{badge}")
-        lines.append(f"⭐ {brief.importance_score:.1f}/10    📂 {escape(brief.category)}    📡 {brief.sources_count}")
+        lines.append(
+            format_meta_line(
+                score=brief.importance_score,
+                category=brief.category,
+                sources=brief.sources_count,
+                posts=brief.posts_count,
+                first_seen=brief.first_seen,
+            )
+        )
         lines.append("")
     return "\n".join(lines).rstrip()
 
 
-def format_news_detail(lang: str, news: Event | Brief, *, index: int, total: int) -> str:
-    brief = news if isinstance(news, Brief) else to_brief(news, lang)
+def format_news_detail(
+    lang: str,
+    news: Event | Brief,
+    *,
+    index: int,
+    total: int,
+    show_summary: bool = True,
+    related: list[Event] | None = None,
+) -> str:
+    brief = news if isinstance(news, Brief) else to_brief(news, lang, show_summary=show_summary)
     lines = [
         f"<b>{index} / {total}</b>",
         "",
         f"<b>{escape(brief.title)}</b>",
         "",
-        escape(brief.summary),
-        "",
-        f"⭐ <b>{brief.importance_score:.1f}/10</b>",
-        f"📂 {escape(brief.category)}",
-        f"📡 {brief.sources_count}",
-        f"📰 {brief.posts_count}",
     ]
+    if show_summary and brief.summary:
+        lines.append(escape(brief.summary))
+        lines.append("")
+    lines.append(
+        format_meta_line(
+            score=brief.importance_score,
+            category=brief.category,
+            sources=brief.sources_count,
+            posts=brief.posts_count,
+            first_seen=brief.first_seen,
+        )
+    )
     if brief.topic:
         lines.append(f"🏷 {escape(brief.topic)}")
     if brief.updated:
         lines.append("")
         lines.append(f"📈 {t(lang, 'updated_badge')}: {brief.sources_count} {t(lang, 'sources_n')}")
+    if related:
+        lines.append("")
+        lines.append(f"<b>{t(lang, 'related_events')}</b>")
+        for ev in related[:4]:
+            lines.append(f"• {escape(normalize_title(ev.title))}")
     return "\n".join(lines)
 
 
@@ -136,13 +197,25 @@ def format_sources_screen(lang: str, news: Event | Brief) -> str:
         title = escape(src.channel_title or "Channel")
         uname = f" @{src.channel_username}" if src.channel_username else ""
         date = src.published_at.strftime("%d.%m.%Y") if src.published_at else ""
+        author = escape(src.author) if src.author else "—"
         lines.append(f"{circled(i)} 📰 {title}{uname}")
         if date:
             lines.append(f"   🕒 {date}")
+        lines.append(f"   ✍️ {t(lang, 'author')}: {author}")
+        if src.url:
+            lines.append(f'   🔗 <a href="{escape(src.url)}">link</a>')
     return "\n".join(lines)
 
 
-def format_search_answer(lang: str, answer: str, news_items: list[Event]) -> str:
+def format_search_answer(
+    lang: str,
+    answer: str,
+    news_items: list[Event],
+    *,
+    external_count: int = 0,
+    related_questions: list[str] | None = None,
+    matched_nodes: list[str] | None = None,
+) -> str:
     if not news_items:
         empty = (answer or "").strip() or t(lang, "search_empty")
         return (
@@ -152,7 +225,12 @@ def format_search_answer(lang: str, answer: str, news_items: list[Event]) -> str
         )
     ref = news_items[0].created_at if news_items else None
     answer_resolved = resolve_relative_dates(answer, ref)
-    lines = [f"<b>🤖 {t(lang, 'search_answer')}</b>", "", escape(answer_resolved), ""]
+    lines = [f"<b>🤖 {t(lang, 'search_answer')}</b>", ""]
+    if matched_nodes:
+        lines.append("🧭 " + ", ".join(escape(n) for n in matched_nodes[:6]))
+        lines.append("")
+    lines.append(escape(answer_resolved))
+    lines.append("")
     lines.append(f"<b>{t(lang, 'sources')}</b>")
     lines.append("")
     for i, event in enumerate(news_items[:5], start=1):
@@ -164,30 +242,119 @@ def format_search_answer(lang: str, answer: str, news_items: list[Event]) -> str
             date = src.published_at.strftime("%d.%m.%Y")
         url = src.url if src else ""
         lines.append(f"{circled(i)} <b>{escape(brief.title)}</b>")
+        lines.append(
+            format_meta_line(
+                score=brief.importance_score,
+                category=brief.category,
+                sources=brief.sources_count,
+                posts=brief.posts_count,
+            )
+        )
         lines.append(f"   📰 {channel}" + (f" · {date}" if date else ""))
         if url:
             lines.append(f'   🔗 <a href="{escape(url)}">link</a>')
+        lines.append("")
+    if related_questions:
+        lines.append(f"<b>{t(lang, 'related_questions')}</b>")
+        for q in related_questions[:4]:
+            lines.append(f"• {escape(q)}")
+        lines.append("")
+    if external_count > 0:
+        lines.append(t(lang, "search_external_hint").format(n=external_count))
+    return "\n".join(lines).rstrip()
+
+
+def format_search_explain(lang: str, explanations: dict[int, list[str]], events: list[Event]) -> str:
+    lines = [f"<b>❔ {t(lang, 'why_found')}</b>", ""]
+    by_id = {e.id: e for e in events}
+    for eid, reasons in explanations.items():
+        ev = by_id.get(eid)
+        title = normalize_title(ev.title) if ev else f"#{eid}"
+        lines.append(f"<b>{escape(title)}</b>")
+        for r in reasons:
+            lines.append(f"✔ {escape(r)}")
+        lines.append("")
+    if len(lines) <= 2:
+        lines.append("—")
+    return "\n".join(lines).rstrip()
+
+
+def format_history_list(
+    lang: str,
+    rows: list[tuple[Event, object]],
+) -> str:
+    if not rows:
+        return t(lang, "empty_history")
+    lines = [f"<b>📚 {t(lang, 'history')}</b>", ""]
+    for i, (event, state) in enumerate(rows[:15], start=1):
+        brief = to_brief(event, lang)
+        read_at = getattr(state, "read_at", None)
+        when = read_at.strftime("%d.%m %H:%M") if read_at else "—"
+        lines.append(f"{circled(i)} <b>{escape(brief.title)}</b>")
+        lines.append(
+            format_meta_line(
+                score=brief.importance_score,
+                category=brief.category,
+                sources=brief.sources_count,
+                posts=brief.posts_count,
+            )
+        )
+        lines.append(f"   🕒 {when}")
         lines.append("")
     return "\n".join(lines).rstrip()
 
 
 def format_trends(lang: str, rows: list[dict]) -> str:
     if not rows:
-        return f"<b>🔥 {t(lang, 'trends')}</b>\n\n—"
+        return f"<b>🔥 {t(lang, 'trends')}</b>\n\n{t(lang, 'trends_empty')}"
     lines = [f"<b>🔥 {t(lang, 'trends')}</b>", ""]
     for row in rows:
-        growth = row.get("growth_today") or 0
-        title = row.get("title") or row.get("topic") or ""
+        title = normalize_title(row.get("title") or row.get("topic") or "")
+        first_seen = row.get("first_seen")
+        if isinstance(first_seen, str):
+            first_seen = None
         lines.append(f"🔥 <b>{escape(title)}</b>")
         lines.append(
-            f"📡 {row['sources']} {t(lang, 'sources_n')} · "
-            f"📰 {row.get('posts_count', row.get('news_count', 0))} {t(lang, 'related_news')}"
+            format_meta_line(
+                score=float(row.get("importance_score") or row.get("score") or 0),
+                category=str(row.get("category") or "Other"),
+                sources=int(row.get("sources") or 0),
+                posts=int(row.get("posts_count", row.get("news_count", 0)) or 0),
+                first_seen=first_seen if isinstance(first_seen, datetime) else None,
+            )
         )
-        if growth:
-            lines.append(f"📈 +{growth} {t(lang, 'today_growth')}")
-        lines.append("────────")
         lines.append("")
-    return "\n".join(lines).rstrip("─ \n")
+    return "\n".join(lines).rstrip()
+
+
+def _progress_bar(percent: int, width: int = 10) -> str:
+    p = max(0, min(100, int(percent)))
+    filled = int(round(width * p / 100))
+    return "█" * filled + "░" * (width - filled)
+
+
+def format_backfill_progress(lang: str, job) -> str:
+    pct = int(getattr(job, "percent", 0) or 0)
+    done = int(getattr(job, "done", 0) or 0)
+    total = int(getattr(job, "total", 0) or 0)
+    days = int(getattr(job, "days", 0) or 0)
+    msgs = int(getattr(job, "messages_fetched", 0) or 0)
+    status = str(getattr(job, "status", "") or "")
+    status_key = {
+        "queued": "bf_status_queued",
+        "running": "bf_status_running",
+        "analyzing": "bf_status_analyzing",
+        "done": "bf_status_done",
+        "failed": "bf_status_failed",
+    }.get(status, "bf_status_queued")
+    return (
+        f"<b>📥 {t(lang, 'load_news')}</b>\n\n"
+        f"{t(lang, 'bf_period', days=days)}\n"
+        f"<code>{_progress_bar(pct)}</code> <b>{pct}%</b>\n"
+        f"{t(lang, 'bf_channels', done=done, total=total)}\n"
+        f"{t(lang, 'bf_messages', n=msgs)}\n"
+        f"{t(lang, 'bf_status')}: <b>{t(lang, status_key)}</b>"
+    )
 
 
 def format_settings(lang: str, settings) -> str:
@@ -200,9 +367,16 @@ def format_settings(lang: str, settings) -> str:
         iv = f"{interval // 60}h"
     else:
         iv = f"{interval // 1440}d"
+    on = t(lang, "on")
+    off = t(lang, "off")
     return (
         f"<b>⚙ {t(lang, 'settings')}</b>\n\n"
         f"🌐 {t(lang, 'language')}: <b>{settings.language}</b>\n"
+        f"🗣 {t(lang, 'news_language')}: <b>{settings.news_language}</b>\n"
+        f"📄 {t(lang, 'feed_page_size')}: <b>{settings.feed_page_size}</b>\n"
+        f"🔔 {t(lang, 'notifications')}: <b>{on if settings.notifications_enabled else off}</b>\n"
+        f"🌍 {t(lang, 'include_external')}: <b>{on if settings.include_external_news else off}</b>\n"
+        f"📝 {t(lang, 'show_summary')}: <b>{on if settings.show_summary else off}</b>\n"
         f"🕒 {iv}\n"
         f"⭐ {settings.min_importance:.1f}+\n"
         f"📂 {escape(cats_s)}\n"
@@ -228,6 +402,7 @@ def format_privacy(lang: str) -> str:
 
 def onboarding_steps(lang: str) -> list[tuple[str, str]]:
     return [
+        (t(lang, "onb_icons_t"), t(lang, "onb_icons_b")),
         (t(lang, "onb_1_t"), t(lang, "onb_1_b")),
         (t(lang, "onb_2_t"), t(lang, "onb_2_b")),
         (t(lang, "onb_3_t"), t(lang, "onb_3_b")),

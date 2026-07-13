@@ -72,8 +72,18 @@ def test_groq_json_unknown_category():
             "why_important": "market move",
         }
     )
-    assert result.category == "CryptoXYZ"
+    assert result.category == "Other"
     assert result.importance_score == 10.0
+    ok = _to_analysis(
+        {
+            "is_news": True,
+            "title": "X",
+            "summary": "Y",
+            "category": "Politics",
+            "importance_score": 5,
+        }
+    )
+    assert ok.category == "Politics"
     huge = _to_analysis(
         {
             "is_news": True,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from aiogram import F, Router
@@ -16,7 +15,6 @@ from app.bot.i18n import btn_feed, btn_search, btn_settings, btn_trends, t
 from app.bot.keyboards import home_keyboard, language_keyboard, main_menu, onboarding_keyboard
 from app.bot.ui import format_home, onboarding_steps
 from app.models import Event, User
-from app.models import Message as DbMessage
 from app.services.preferences import PreferencesService
 
 router = Router(name="home")
@@ -25,21 +23,6 @@ BANNER_PATH = Path(__file__).resolve().parents[1] / "assets" / "welcome.png"
 
 async def _lang(session: AsyncSession, user: User) -> str:
     return await PreferencesService(session).lang(user)
-
-
-async def _today_stats(session: AsyncSession):
-    since = datetime.now(timezone.utc) - timedelta(hours=24)
-    messages = await session.scalar(
-        select(func.count()).select_from(DbMessage).where(DbMessage.created_at >= since)
-    )
-    news_count = await session.scalar(
-        select(func.count()).select_from(Event).where(Event.created_at >= since)
-    )
-    avg = await session.scalar(
-        select(func.avg(Event.importance_score)).where(Event.created_at >= since)
-    )
-    last = await session.scalar(select(func.max(Event.updated_at)))
-    return int(messages or 0), int(news_count or 0), float(avg or 0), last
 
 
 async def send_home(message: Message, session: AsyncSession, user: User) -> None:
@@ -53,8 +36,15 @@ async def send_home(message: Message, session: AsyncSession, user: User) -> None
         )
         return
 
-    msgs, news_n, avg, last = await _today_stats(session)
-    text = format_home(lang, messages=msgs, news=news_n, avg_importance=avg, last_update=last)
+    stats = await prefs.user_stats(user)
+    last = await session.scalar(select(func.max(Event.updated_at)))
+    text = format_home(
+        lang,
+        last_update=last,
+        read=stats["read"],
+        saved=stats["saved"],
+        liked=stats["liked"],
+    )
     await message.answer(t(lang, "menu_hint"), reply_markup=main_menu(lang))
     if not settings.welcome_seen and BANNER_PATH.exists():
         await message.answer_photo(
@@ -67,6 +57,15 @@ async def send_home(message: Message, session: AsyncSession, user: User) -> None
         await message.answer(text, reply_markup=home_keyboard(lang))
         if not settings.welcome_seen:
             await prefs.mark_welcome_seen(user)
+
+    if not settings.tutorial_seen:
+        steps = onboarding_steps(lang)
+        title, body = steps[0]
+        await message.answer(
+            f"<b>{title}</b>\n\n{body}",
+            reply_markup=onboarding_keyboard(lang, 0, len(steps)),
+        )
+        await prefs.mark_tutorial_seen(user)
 
 
 @router.message(CommandStart())

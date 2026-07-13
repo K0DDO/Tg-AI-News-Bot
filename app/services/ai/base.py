@@ -6,15 +6,7 @@ from dataclasses import dataclass, field
 from typing import Protocol, Sequence
 
 
-ALLOWED_CATEGORIES = (
-    "AI",
-    "Technology",
-    "Hardware",
-    "Software",
-    "Science",
-    "Business",
-    "Other",
-)
+from app.services.categories import ALLOWED_CATEGORIES, CATEGORY_ALIASES
 
 
 @dataclass(frozen=True, slots=True)

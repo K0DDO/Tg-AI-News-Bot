@@ -1,4 +1,7 @@
 from app.bot.keyboards.inline import (
+    add_channels_keyboard,
+    backfill_period_keyboard,
+    backfill_progress_keyboard,
     categories_keyboard,
     channel_list_keyboard,
     channels_menu_keyboard,
@@ -10,6 +13,9 @@ from app.bot.keyboards.inline import (
     language_keyboard,
     min_importance_keyboard,
     onboarding_keyboard,
+    page_size_keyboard,
+    search_external_keyboard,
+    search_result_keyboard,
     settings_keyboard,
     sources_keyboard,
 )
@@ -27,7 +33,13 @@ __all__ = [
     "settings_keyboard",
     "interval_keyboard",
     "min_importance_keyboard",
+    "page_size_keyboard",
+    "search_external_keyboard",
+    "search_result_keyboard",
     "categories_keyboard",
     "channels_menu_keyboard",
     "channel_list_keyboard",
+    "add_channels_keyboard",
+    "backfill_period_keyboard",
+    "backfill_progress_keyboard",
 ]

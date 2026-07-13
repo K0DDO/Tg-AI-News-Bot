@@ -2,19 +2,10 @@
 
 from __future__ import annotations
 
-import re
 from typing import Sequence
 
+from app.services.categories import guess_category
 from app.services.ports import SummaryResult
-
-_CATEGORY_RULES: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"\b(ai|ии|нейросет|chatgpt|openai|llm|machine learning)\b", re.I), "AI"),
-    (re.compile(r"\b(nvidia|gpu|chip|процессор|полупроводник)\b", re.I), "Hardware"),
-    (re.compile(r"\b(apple|iphone|macbook|ios|android|google)\b", re.I), "Technology"),
-    (re.compile(r"\b(crypto|bitcoin|ethereum|блокчейн)\b", re.I), "Crypto"),
-    (re.compile(r"\b(startup|funding|инвестиц|ipo)\b", re.I), "Business"),
-    (re.compile(r"\b(security|взлом|уязвим|хакер)\b", re.I), "Security"),
-]
 
 
 class HeuristicSummarizer:
@@ -32,11 +23,5 @@ class HeuristicSummarizer:
         summary = primary[:400]
         if len(primary) > 400:
             summary = summary.rsplit(" ", 1)[0] + "…"
-        category = self._guess_category(primary)
+        category = guess_category(primary)
         return SummaryResult(title=title, summary=summary, category=category)
-
-    def _guess_category(self, text: str) -> str:
-        for pattern, category in _CATEGORY_RULES:
-            if pattern.search(text):
-                return category
-        return "General"

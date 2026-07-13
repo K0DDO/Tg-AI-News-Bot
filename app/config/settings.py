@@ -36,11 +36,11 @@ class Settings(BaseSettings):
     admin_secret_key: str = "change-me"
 
     parser_poll_interval_seconds: int = 120
-    cluster_similarity_threshold: float = 0.75
+    cluster_similarity_threshold: float = 0.68
     cluster_lookback_hours: int = 48
     digest_default_limit: int = 5
     daily_digest_limit: int = 10
-    message_retention_days: int = 14
+    message_retention_days: int = 31
 
     # hashing | sentence-transformers | auto
     embedding_backend: str = "hashing"

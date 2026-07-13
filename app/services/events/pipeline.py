@@ -28,6 +28,7 @@ from app.services.events.timeline import TimelineService, make_entry
 from app.services.ports import ClusterCandidate, EmbeddingPort, ScorerPort
 from app.services.scoring import ImportanceScorer
 from app.utils.relative_dates import resolve_relative_dates
+from app.utils.text_clean import strip_at_mentions
 
 logger = logging.getLogger(__name__)
 
@@ -192,10 +193,10 @@ class EventPipeline:
         ]
         ref_now = datetime.now(timezone.utc)
         event = Event(
-            title=resolve_relative_dates(analysis.title, ref_now),
-            summary=resolve_relative_dates(analysis.summary, ref_now),
+            title=strip_at_mentions(resolve_relative_dates(analysis.title, ref_now)),
+            summary=strip_at_mentions(resolve_relative_dates(analysis.summary, ref_now)),
             category=analysis.category,
-            topic=resolve_relative_dates(analysis.topic or "", ref_now) or None,
+            topic=strip_at_mentions(resolve_relative_dates(analysis.topic or "", ref_now)) or None,
             why_important=analysis.why_important,
             entities=entities,
             keywords=list(analysis.keywords),
@@ -221,6 +222,7 @@ class EventPipeline:
         message.status = MessageStatus.PROCESSED.value
         message.processed_at = datetime.now(timezone.utc)
         await self._session.flush()
+        await self._ingest_knowledge(event)
         return ProcessResult(event=event, action="created")
 
     async def _attach(
@@ -261,6 +263,17 @@ class EventPipeline:
         await self.rescore_event(event.id)
         await self._session.refresh(event, attribute_names=["sources", "importance_score", "sources_count", "posts_count", "timeline"])
 
+        # Union light entities into Event on merge (feeds KG without re-LLM)
+        light = light_entities_from_text(message.text)
+        if light:
+            existing = list(event.entities or [])
+            seen = {str(x).lower() for x in existing}
+            for e in light:
+                if e.lower() not in seen:
+                    existing.append(e)
+                    seen.add(e.lower())
+            event.entities = existing[:40]
+
         n_sources = event.sources_count or len(event.sources or [])
         event.timeline = self._timeline.append(
             event.timeline,
@@ -281,7 +294,18 @@ class EventPipeline:
                 ),
             )
         await self._session.flush()
+        await self._ingest_knowledge(event, extra_entities=light or None)
         return event
+
+    async def _ingest_knowledge(self, event: Event, *, extra_entities: list[str] | None = None) -> None:
+        try:
+            from app.services.knowledge import KnowledgeGraphService
+
+            await KnowledgeGraphService(self._session).ingest_event(
+                event, extra_entities=extra_entities
+            )
+        except Exception:
+            logger.exception("Knowledge graph ingest failed for event %s", event.id)
 
     async def _load_candidates(self) -> list[ClusterCandidate]:
         since = datetime.now(timezone.utc) - timedelta(hours=self._lookback_hours)

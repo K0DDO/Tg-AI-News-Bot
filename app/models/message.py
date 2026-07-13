@@ -60,6 +60,7 @@ class Message(Base):
     raw_embedding: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
     media: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
     raw_entities: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    author: Mapped[str | None] = mapped_column(String(255), nullable=True)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

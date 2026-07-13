@@ -9,10 +9,14 @@ from app.config import get_settings
 from app.database.base import Base
 from app.models import (  # noqa: F401 — register models on metadata
     AiUsageLog,
+    BackfillJob,
     Channel,
+    Edge,
     Event,
+    EventNode,
     EventSource,
     Message,
+    Node,
     Reaction,
     User,
     UserChannel,

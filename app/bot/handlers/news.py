@@ -9,9 +9,8 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.i18n import t
-from app.bot.keyboards import detail_keyboard, feed_keyboard, sources_keyboard
+from app.bot.keyboards import add_channels_keyboard, detail_keyboard, feed_keyboard, sources_keyboard
 from app.bot.ui import format_feed, format_news_detail, format_sources_screen
-from app.config import get_settings
 from app.models import User
 from app.services.digest import NewsService
 from app.services.events import BriefBuilderService
@@ -31,6 +30,29 @@ async def _event(session: AsyncSession, event_id: int):
     return await NewsService(session).get_event(event_id)
 
 
+async def _related_events(session: AsyncSession, news, *, limit: int = 4):
+    """Prefer cached related_event_ids; fall back to KG only if empty."""
+    cached = list(getattr(news, "related_event_ids", None) or [])[:limit]
+    if cached:
+        from sqlalchemy import select
+
+        from app.models import Event
+
+        result = await session.execute(
+            select(Event)
+            .where(Event.id.in_(cached), Event.status == "active")
+            .order_by(Event.importance_score.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+    try:
+        from app.services.knowledge import KnowledgeGraphService
+
+        return await KnowledgeGraphService(session).related_events(news, limit=limit)
+    except Exception:
+        return []
+
+
 async def open_feed(
     target: Message,
     session: AsyncSession,
@@ -40,11 +62,12 @@ async def open_feed(
     edit: bool = False,
 ) -> None:
     lang = await _lang(session, user)
-    settings = get_settings()
-    limit = settings.digest_default_limit
-    items, total = await FeedService(session).get_feed(user, limit=limit, offset=offset)
+    prefs = PreferencesService(session)
+    us = await prefs.get_or_create(user)
+    news_lang = us.news_language or lang
+    items, total = await FeedService(session).get_feed(user, offset=offset)
     for n in items:
-        await ensure_translation(session, n, lang)
+        await ensure_translation(session, n, news_lang)
     if not items and offset == 0:
         from sqlalchemy import func, select
 
@@ -58,15 +81,25 @@ async def open_feed(
         )
         if not n_ch:
             text = f"📂 {t(lang, 'no_channels_feed')}"
-        else:
-            text = f"⏳ {t(lang, 'feed_processing')}\n\n🎉 {t(lang, 'no_more_news')}"
+            kb = add_channels_keyboard(lang)
+            if edit and getattr(target, "message_id", None):
+                try:
+                    await target.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
+                    return
+                except TelegramBadRequest:
+                    pass
+            await target.answer(text, reply_markup=kb, disable_web_page_preview=True)
+            return
+        text = t(lang, "no_more_news")
+    elif not items:
+        text = t(lang, "no_more_news")
     else:
         text = format_feed(lang, items)
     ids = [n.id for n in items]
     has_more = offset + len(items) < total and bool(items)
     kb = feed_keyboard(lang, offset=offset, page_ids=ids, has_more=has_more)
 
-    prefs = PreferencesService(session)
+    # Inline navigation (next/back/refresh): edit in place
     if edit and getattr(target, "message_id", None):
         try:
             await target.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
@@ -75,20 +108,8 @@ async def open_feed(
         except TelegramBadRequest:
             pass
 
-    us = await prefs.get_or_create(user)
-    if us.digest_chat_id and us.digest_message_id and target.bot and not edit:
-        try:
-            await target.bot.edit_message_text(
-                chat_id=us.digest_chat_id,
-                message_id=us.digest_message_id,
-                text=text,
-                reply_markup=kb,
-                disable_web_page_preview=True,
-            )
-            return
-        except TelegramBadRequest:
-            pass
-
+    # Always send a NEW message when opening feed from menu/command.
+    # Editing an old digest far up the chat looks like "nothing happened".
     sent = await target.answer(text, reply_markup=kb, disable_web_page_preview=True)
     await prefs.save_digest_message(user, sent.chat.id, sent.message_id)
 
@@ -104,31 +125,30 @@ async def cmd_feed(event: Message | CallbackQuery, session: AsyncSession, db_use
     await open_feed(event, session, db_user, offset=0)
 
 
+@router.callback_query(F.data == "feed:refresh")
+async def feed_refresh(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    await callback.answer()
+    if callback.message:
+        await open_feed(callback.message, session, db_user, offset=0, edit=True)
+
+
 @router.callback_query(F.data.startswith("feed:next:"))
 async def feed_next(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     offset = int(callback.data.split(":")[2])
-    limit = get_settings().digest_default_limit
+    prefs = PreferencesService(session)
+    us = await prefs.get_or_create(db_user)
+    limit = int(us.feed_page_size or 5)
     offset += limit
     await callback.answer()
-    if not callback.message:
-        return
-    items, total = await FeedService(session).get_feed(db_user, limit=limit, offset=offset)
-    if not items:
-        lang = await _lang(session, db_user)
-        await callback.message.edit_text(
-            f"🎉 {t(lang, 'no_more_news')}",
-            reply_markup=feed_keyboard(lang, offset=offset, page_ids=[], has_more=False),
-        )
-        return
-    await open_feed(callback.message, session, db_user, offset=offset, edit=True)
+    if callback.message:
+        await open_feed(callback.message, session, db_user, offset=offset, edit=True)
 
 
 @router.callback_query(F.data.startswith("feed:back:"))
 async def feed_back(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
-    offset = int(callback.data.split(":")[2])
     await callback.answer()
     if callback.message:
-        await open_feed(callback.message, session, db_user, offset=offset, edit=True)
+        await open_feed(callback.message, session, db_user, offset=0, edit=True)
 
 
 @router.callback_query(F.data.startswith("feed:open:"))
@@ -140,15 +160,26 @@ async def feed_open(callback: CallbackQuery, session: AsyncSession, db_user: Use
     if not ids or not callback.message:
         return
     index = max(0, min(index, len(ids) - 1))
-    lang = await _lang(session, db_user)
+    prefs = PreferencesService(session)
+    lang = await prefs.lang(db_user)
+    us = await prefs.get_or_create(db_user)
+    news_lang = us.news_language or lang
     news = await _event(session, ids[index])
     if not news:
         return
-    await ensure_translation(session, news, lang)
+    await ensure_translation(session, news, news_lang)
     await FeedService(session).mark_read(db_user, news)
-    brief = _briefs.build(news, lang=lang)
+    brief = _briefs.build(news, lang=news_lang, show_summary=us.show_summary)
+    related = await _related_events(session, news, limit=4)
     await callback.message.edit_text(
-        format_news_detail(lang, brief, index=index + 1, total=len(ids)),
+        format_news_detail(
+            lang,
+            brief,
+            index=index + 1,
+            total=len(ids),
+            show_summary=us.show_summary,
+            related=related,
+        ),
         reply_markup=detail_keyboard(
             lang, offset=offset, index=index, total=len(ids), news_id=news.id, ids_s=ids_s
         ),
@@ -162,7 +193,7 @@ async def feed_up(callback: CallbackQuery, session: AsyncSession, db_user: User)
     await ReactionService(session).mark_interesting(db_user.id, news_id)
     news = await _event(session, news_id)
     if news:
-        await FeedService(session).mark_read(db_user, news)
+        await FeedService(session).mark_liked(db_user, news)
     lang = await _lang(session, db_user)
     await callback.answer(t(lang, "interesting"))
 
@@ -183,18 +214,23 @@ async def feed_down(callback: CallbackQuery, session: AsyncSession, db_user: Use
         return
     remaining = [i for i in ids if i != news_id]
     if not remaining:
-        await open_feed(callback.message, session, db_user, offset=offset, edit=True)
+        await open_feed(callback.message, session, db_user, offset=0, edit=True)
         return
     new_index = min(index, len(remaining) - 1)
     ids_s2 = ",".join(str(i) for i in remaining)
+    prefs = PreferencesService(session)
+    us = await prefs.get_or_create(db_user)
+    news_lang = us.news_language or lang
     n2 = await _event(session, remaining[new_index])
     if not n2:
         return
-    await ensure_translation(session, n2, lang)
+    await ensure_translation(session, n2, news_lang)
     await FeedService(session).mark_read(db_user, n2)
-    brief = _briefs.build(n2, lang=lang)
+    brief = _briefs.build(n2, lang=news_lang, show_summary=us.show_summary)
     await callback.message.edit_text(
-        format_news_detail(lang, brief, index=new_index + 1, total=len(remaining)),
+        format_news_detail(
+            lang, brief, index=new_index + 1, total=len(remaining), show_summary=us.show_summary
+        ),
         reply_markup=detail_keyboard(
             lang, offset=offset, index=new_index, total=len(remaining), news_id=n2.id, ids_s=ids_s2
         ),
@@ -223,7 +259,7 @@ async def feed_sources(callback: CallbackQuery, session: AsyncSession, db_user: 
     if not news or not callback.message:
         return
     brief = _briefs.build(news, lang=lang)
-    pairs = [(s.channel_title or "Source", s.url) for s in brief.sources]
+    pairs = [(s.channel_title or "Source", s.url) for s in brief.sources if s.url]
     await callback.message.answer(
         format_sources_screen(lang, brief),
         reply_markup=sources_keyboard(pairs, lang),

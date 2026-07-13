@@ -1,8 +1,9 @@
-# Briefly — stop old bot/worker/api processes and start the stack fresh.
-# Usage (from project root):
+# Briefly - stop old bot/worker/api and start fresh.
+# Usage:
 #   .\scripts\restart.ps1
 #   .\scripts\restart.ps1 -SkipMigrate
 #   .\scripts\restart.ps1 -NoApi
+#   double-click scripts\restart.bat
 
 param(
     [switch]$SkipMigrate,
@@ -12,12 +13,19 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-Set-Location $Root
+
+if ($PSScriptRoot) {
+    $Root = Split-Path -Parent $PSScriptRoot
+} else {
+    $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+}
+Set-Location -LiteralPath $Root
 
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
-if (-not (Test-Path $Python)) {
-    Write-Host "ERROR: .venv not found. Run: python -m venv .venv && .\.venv\Scripts\pip install -r requirements.txt" -ForegroundColor Red
+if (-not (Test-Path -LiteralPath $Python)) {
+    Write-Host "ERROR: .venv not found:" -ForegroundColor Red
+    Write-Host "  $Python"
+    Write-Host "Run: python -m venv .venv && .\.venv\Scripts\pip install -r requirements.txt"
     exit 1
 }
 
@@ -25,18 +33,26 @@ $LogDir = Join-Path $Root "data\logs"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 function Get-BrieflyPython {
-    Get-CimInstance Win32_Process -Filter "Name = 'python.exe' OR Name = 'pythonw.exe'" -ErrorAction SilentlyContinue |
+    # Only top-level processes (parent is not another briefly python).
+    # Worker/bot may spawn child pythons that share the same CommandLine.
+    $all = @(Get-CimInstance Win32_Process -Filter "Name = 'python.exe' OR Name = 'pythonw.exe'" -ErrorAction SilentlyContinue |
         Where-Object {
             $_.CommandLine -and (
                 $_.CommandLine -match 'app\.bot\.main' -or
                 $_.CommandLine -match 'app\.tasks\.worker' -or
                 $_.CommandLine -match 'uvicorn.*app\.api\.main'
             )
-        }
+        })
+    $byPid = @{}
+    foreach ($p in $all) { $byPid[$p.ProcessId] = $p }
+    $all | Where-Object {
+        -not $byPid.ContainsKey($_.ParentProcessId)
+    }
 }
 
 function Stop-BrieflyProcesses {
-    Write-Host "`n[1/3] Stopping previous Briefly processes..." -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "[1/3] Stopping previous Briefly processes..." -ForegroundColor Cyan
     $killed = 0
     foreach ($p in @(Get-BrieflyPython)) {
         try {
@@ -49,8 +65,7 @@ function Stop-BrieflyProcesses {
     }
 
     try {
-        $listeners = Get-NetTCPConnection -LocalPort $ApiPort -State Listen -ErrorAction SilentlyContinue
-        foreach ($l in $listeners) {
+        foreach ($l in @(Get-NetTCPConnection -LocalPort $ApiPort -State Listen -ErrorAction SilentlyContinue)) {
             $ownerPid = $l.OwningProcess
             if (-not $ownerPid) { continue }
             $owner = Get-CimInstance Win32_Process -Filter "ProcessId = $ownerPid" -ErrorAction SilentlyContinue
@@ -63,7 +78,6 @@ function Stop-BrieflyProcesses {
     } catch { }
 
     Start-Sleep -Seconds 2
-    # second pass
     foreach ($p in @(Get-BrieflyPython)) {
         Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
         $killed++
@@ -75,70 +89,78 @@ function Stop-BrieflyProcesses {
 function Start-BrieflyProcess {
     param(
         [string]$Name,
-        [string]$Arguments,
+        [string]$PyArgs,
         [string]$LogFile
     )
     $logPath = Join-Path $LogDir $LogFile
-    # Single python process; append stdout/stderr to log (no Tee double-pipe quirks)
-    $psCmd = @"
-`$Host.UI.RawUI.WindowTitle = 'Briefly · $Name'
-Set-Location -LiteralPath '$Root'
-`$ErrorActionPreference = 'Continue'
-& '$Python' $Arguments *>> '$logPath'
+    $safeName = ($Name -replace '\s', '_')
+    $wrapper = Join-Path $LogDir ("start_{0}.cmd" -f $safeName)
+
+    # Visible console + UTF-8. Output stays in the window (easy to debug).
+    $content = @"
+@echo off
+chcp 65001 >nul
+set PYTHONUTF8=1
+set PYTHONIOENCODING=utf-8
+title Briefly - $Name
+cd /d "$Root"
+echo [%date% %time%] starting $Name
+"$Python" $PyArgs
+echo.
+echo $Name stopped (exit %ERRORLEVEL%).
+echo Log dir: $LogDir
+pause
 "@
-    Start-Process -FilePath "powershell.exe" -WorkingDirectory $Root -ArgumentList @(
-        "-NoExit",
-        "-ExecutionPolicy", "Bypass",
-        "-Command", $psCmd
-    ) | Out-Null
-    Write-Host "  started $Name → $logPath"
+    Set-Content -LiteralPath $wrapper -Value $content -Encoding ASCII
+
+    # Start the .cmd directly - opens its own console (no nested Start-Process quirks)
+    Start-Process -FilePath $wrapper -WorkingDirectory $Root | Out-Null
+    Write-Host "  started $Name (console window)"
 }
 
-function Keep-One {
-    param([string]$Pattern, [string]$Label)
-    $list = @(Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" |
-        Where-Object { $_.CommandLine -match $Pattern } |
-        Sort-Object ProcessId)
-    if ($list.Count -le 1) { return }
-    $keep = $list[-1]
-    foreach ($p in $list[0..($list.Count - 2)]) {
-        Write-Host "  dedupe ${Label}: kill $($p.ProcessId)"
-        Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
-    }
-    Write-Host "  dedupe ${Label}: keep $($keep.ProcessId)"
-}
+Write-Host "Briefly restart" -ForegroundColor Cyan
+Write-Host "  root:   $Root"
+Write-Host "  python: $Python"
 
 Stop-BrieflyProcesses
 
 if (-not $SkipMigrate) {
-    Write-Host "`n[2/3] alembic upgrade head..." -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "[2/3] alembic upgrade head..." -ForegroundColor Cyan
     & $Python -m alembic upgrade head
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: migration failed" -ForegroundColor Red
         exit $LASTEXITCODE
     }
 } else {
-    Write-Host "`n[2/3] skip migrations" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "[2/3] skip migrations" -ForegroundColor Yellow
 }
 
-Write-Host "`n[3/3] Starting stack..." -ForegroundColor Cyan
+Write-Host ""
+Write-Host "[3/3] Starting stack..." -ForegroundColor Cyan
 
 if (-not $NoApi) {
-    Start-BrieflyProcess -Name "API" -Arguments "-m uvicorn app.api.main:app --host 127.0.0.1 --port $ApiPort" -LogFile "api.log"
+    Start-BrieflyProcess -Name "API" -PyArgs "-m uvicorn app.api.main:app --host 127.0.0.1 --port $ApiPort" -LogFile "api.log"
 }
 if (-not $NoWorker) {
-    Start-BrieflyProcess -Name "Worker" -Arguments "-m app.tasks.worker" -LogFile "worker.log"
+    Start-BrieflyProcess -Name "Worker" -PyArgs "-m app.tasks.worker" -LogFile "worker.log"
 }
-Start-BrieflyProcess -Name "Bot" -Arguments "-m app.bot.main" -LogFile "bot.log"
+Start-BrieflyProcess -Name "Bot" -PyArgs "-m app.bot.main" -LogFile "bot.log"
 
-Start-Sleep -Seconds 3
-Keep-One 'app\.bot\.main' 'bot'
-Keep-One 'app\.tasks\.worker' 'worker'
-Keep-One 'uvicorn.*app\.api\.main' 'api'
+Start-Sleep -Seconds 5
 
-Write-Host "`nDone. Opened separate windows: Bot / Worker / API" -ForegroundColor Green
-Write-Host "Logs: $LogDir"
+$running = @(Get-BrieflyPython)
+Write-Host ""
+if ($running.Count -eq 0) {
+    Write-Host "WARNING: no python processes detected. Look at the opened console windows." -ForegroundColor Yellow
+} else {
+    Write-Host "Done. Running:" -ForegroundColor Green
+    foreach ($p in $running) {
+        $snippet = $p.CommandLine.Substring(0, [Math]::Min(110, $p.CommandLine.Length))
+        Write-Host ("  PID {0}: {1}" -f $p.ProcessId, $snippet)
+    }
+}
+Write-Host "Logs dir: $LogDir"
 Write-Host "API: http://127.0.0.1:$ApiPort"
-Get-BrieflyPython | ForEach-Object {
-    Write-Host ("  PID {0}: {1}" -f $_.ProcessId, $_.CommandLine.Substring(0, [Math]::Min(90, $_.CommandLine.Length)))
-}
+Write-Host "Console windows should stay open for Bot / Worker / API"

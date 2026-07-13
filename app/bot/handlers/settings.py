@@ -10,14 +10,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.i18n import t
 from app.bot.keyboards import (
+    backfill_period_keyboard,
+    backfill_progress_keyboard,
     categories_keyboard,
     interval_keyboard,
     language_keyboard,
     min_importance_keyboard,
+    page_size_keyboard,
     settings_keyboard,
 )
 from app.bot.states import IgnoreTopicsStates
-from app.bot.ui import format_privacy, format_settings
+from app.bot.ui import format_backfill_progress, format_privacy, format_settings
 from app.models import User
 from app.services.preferences import PreferencesService
 
@@ -170,6 +173,58 @@ async def set_channels(callback: CallbackQuery, session: AsyncSession, db_user: 
         await channels_home(callback.message, session, db_user)
 
 
+@router.callback_query(F.data == "set:backfill")
+async def set_backfill_menu(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    lang = await PreferencesService(session).lang(db_user)
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(
+            f"📥 <b>{t(lang, 'load_news')}</b>\n\n{t(lang, 'load_news_hint')}",
+            reply_markup=backfill_period_keyboard(lang),
+        )
+
+
+@router.callback_query(F.data.startswith("set:bf:"))
+async def set_backfill_run(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    from app.services.channels import ChannelService
+
+    days = int(callback.data.split(":")[2])
+    lang = await PreferencesService(session).lang(db_user)
+    job = await ChannelService(session).request_backfill_for_user(db_user.id, days=days)
+    if not job:
+        await callback.answer(t(lang, "backfill_no_channels"), show_alert=True)
+        return
+    await callback.answer("OK")
+    if callback.message:
+        await callback.message.edit_text(
+            format_backfill_progress(lang, job),
+            reply_markup=backfill_progress_keyboard(lang, job.id),
+        )
+
+
+@router.callback_query(F.data.startswith("set:bfprog:"))
+async def set_backfill_progress(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    from aiogram.exceptions import TelegramBadRequest
+
+    from app.services.channels import ChannelService
+
+    job_id = int(callback.data.split(":")[2])
+    lang = await PreferencesService(session).lang(db_user)
+    job = await ChannelService(session).get_backfill_job(job_id)
+    if not job or job.user_id != db_user.id:
+        await callback.answer(t(lang, "bf_not_found"), show_alert=True)
+        return
+    await callback.answer(f"{job.percent}%")
+    if callback.message:
+        try:
+            await callback.message.edit_text(
+                format_backfill_progress(lang, job),
+                reply_markup=backfill_progress_keyboard(lang, job.id),
+            )
+        except TelegramBadRequest:
+            pass
+
+
 @router.callback_query(F.data == "set:favorites")
 async def set_favorites(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     from app.bot.handlers.library import show_favorites
@@ -186,3 +241,52 @@ async def set_history(callback: CallbackQuery, session: AsyncSession, db_user: U
     await callback.answer()
     if callback.message:
         await show_history(callback.message, session, db_user)
+
+
+@router.callback_query(F.data == "set:newslang")
+async def set_news_lang_menu(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    lang = await PreferencesService(session).lang(db_user)
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(
+            f"🗣 {t(lang, 'set_news_lang')}",
+            reply_markup=language_keyboard(prefix="newslang"),
+        )
+
+
+@router.callback_query(F.data == "set:pagesize")
+async def set_page_size_menu(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    lang = await PreferencesService(session).lang(db_user)
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(
+            f"📄 {t(lang, 'set_page_size')}",
+            reply_markup=page_size_keyboard(lang),
+        )
+
+
+@router.callback_query(F.data.startswith("set:ps:"))
+async def set_page_size(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    size = int(callback.data.split(":")[2])
+    await PreferencesService(session).set_feed_page_size(db_user, size)
+    await callback.answer("OK")
+    if callback.message:
+        await open_settings(callback.message, session, db_user, edit=True)
+
+
+@router.callback_query(F.data.startswith("set:tog:"))
+async def set_toggle(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    field = callback.data.split(":")[2]
+    await PreferencesService(session).toggle_bool(db_user, field)
+    await callback.answer("OK")
+    if callback.message:
+        await open_settings(callback.message, session, db_user, edit=True)
+
+
+@router.callback_query(F.data.startswith("newslang:"))
+async def set_news_lang(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    code = callback.data.split(":")[1]
+    await PreferencesService(session).set_news_language(db_user, code)
+    await callback.answer("OK")
+    if callback.message:
+        await open_settings(callback.message, session, db_user, edit=True)

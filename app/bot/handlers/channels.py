@@ -62,23 +62,44 @@ async def bulk_import(message: Message, session: AsyncSession, db_user: User, st
         return
     service = ChannelService(session)
     ok, fail = 0, []
+    added_ids: list[int] = []
     for username in refs:
         try:
             chat = await message.bot.get_chat(f"@{username}")
             if chat.type not in {"channel", "supergroup"}:
                 fail.append(username)
                 continue
-            await service.add_channel_for_user(
+            channel = await service.add_channel_for_user(
                 db_user,
                 telegram_id=chat.id,
                 title=chat.title or username,
                 username=chat.username or username,
+                backfill_days=2,
+                create_job=False,
             )
+            added_ids.append(channel.id)
             ok += 1
         except Exception:
             fail.append(username)
+    job = None
+    if added_ids:
+        job = await service.create_backfill_job(db_user.id, days=2, channel_ids=added_ids)
+        await session.commit()
+        if job:
+            await session.refresh(job)
     summary = f"✅ +{ok}" + (f"\n❌ {', '.join(fail[:10])}" if fail else "")
-    await message.answer(summary)
+    if ok:
+        summary += f"\n\n{t(lang, 'backfill_queued_add')}"
+    if job:
+        from app.bot.keyboards import backfill_progress_keyboard
+        from app.bot.ui import format_backfill_progress
+
+        await message.answer(
+            format_backfill_progress(lang, job),
+            reply_markup=backfill_progress_keyboard(lang, job.id),
+        )
+    else:
+        await message.answer(summary)
     await _show_list(message, session, db_user, edit=False)
 
 
@@ -98,7 +119,7 @@ async def _show_list(
 ) -> None:
     lang = await PreferencesService(session).lang(user)
     pairs = await ChannelService(session).list_user_channels(user.id)
-    items = [(ch.id, ch.title, ch.enabled) for ch, _ in pairs]
+    items = [(ch.id, ch.title, link.is_active) for ch, link in pairs]
     text = f"<b>📋 {t(lang, 'ch_list')}</b>\n\n{t(lang, 'ch_list_hint')}: <b>{len(items)}</b>"
     kb = channel_list_keyboard(items, lang)
     if edit:
@@ -113,10 +134,7 @@ async def _show_list(
 @router.callback_query(F.data.startswith("ch:tog:"))
 async def ch_toggle(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     channel_id = int(callback.data.split(":")[2])
-    service = ChannelService(session)
-    channel = await service.get_channel(channel_id)
-    if channel:
-        await service.set_channel_enabled(channel_id, not channel.enabled)
+    await ChannelService(session).toggle_user_channel(db_user.id, channel_id)
     await callback.answer("OK")
     if callback.message:
         await _show_list(callback.message, session, db_user, edit=True)

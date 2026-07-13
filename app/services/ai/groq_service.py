@@ -6,13 +6,13 @@ import logging
 from typing import Any, Sequence
 
 from app.services.ai.base import (
-    ALLOWED_CATEGORIES,
     PostAnalysisResult,
     SearchAnswer,
     TranslationResult,
 )
 from app.services.ai.groq_client import GroqClient
 from app.services.ai.heuristic import HeuristicAIService
+from app.services.categories import normalize_category
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ is_news (bool),
 is_advertisement (bool),
 title (string, concise headline about THIS post only),
 summary (string, 2-4 sentences about THIS post only),
-category (ONE of: AI, Technology, Hardware, Software, Science, Business, Other — invent only if necessary),
+category (ONE of: AI, Technology, Hardware, Software, Science, Business, Politics, Entertainment, Sports, Health, Security, Crypto, Gaming, Other),
 topic (string: FULL event sentence for THIS post, e.g. "Destin Daniel Cretton снимет фильм по Наруто" — NEVER a single word),
 entities (array of strings: brands/products/people from THIS post only),
 keywords (array of short search keywords from THIS post),
@@ -178,10 +178,7 @@ class GroqAIService:
 
 
 def _to_analysis(data: dict[str, Any]) -> PostAnalysisResult:
-    category = str(data.get("category") or "Other").strip()
-    if category not in ALLOWED_CATEGORIES:
-        if len(category) > 32 or not category:
-            category = "Other"
+    category = normalize_category(str(data.get("category") or "Other"))
     try:
         score = float(data.get("importance_score", 0))
     except (TypeError, ValueError):
