@@ -1,4 +1,4 @@
-"""Ingest → rule filter → embed/merge → AI analyze (new only)."""
+"""Ingest → Event pipeline (analyze once, merge without LLM)."""
 
 from __future__ import annotations
 
@@ -11,40 +11,14 @@ from app.parser import ChannelFetcher, MessageRepository, create_telegram_client
 from app.services.ai import create_ai_service
 from app.services.channels import ChannelService
 from app.services.cleanup import CleanupService
-from app.services.clustering import HashingEmbedding, get_default_embedding
-from app.services.digest import NewsService
+from app.services.embedding import build_embedding
+from app.services.events import EventPipeline
 
 logger = logging.getLogger(__name__)
 
 
-def _build_embedding():
-    settings = get_settings()
-    backend = (settings.embedding_backend or "hashing").strip().lower()
-    if backend in {"hashing", "hash", "local"}:
-        logger.info("Embedding backend: hashing")
-        return HashingEmbedding()
-    if backend in {"sentence-transformers", "st", "transformer"}:
-        try:
-            emb = get_default_embedding(settings.embedding_model, prefer_transformer=True)
-            if hasattr(emb, "_load"):
-                emb._load()  # type: ignore[attr-defined]
-            logger.info("Embedding backend: sentence-transformers")
-            return emb
-        except Exception:
-            logger.exception("sentence-transformers unavailable, using HashingEmbedding")
-            return HashingEmbedding()
-    # auto
-    try:
-        emb = get_default_embedding(settings.embedding_model, prefer_transformer=True)
-        if hasattr(emb, "_load"):
-            emb._load()  # type: ignore[attr-defined]
-        return emb
-    except Exception:
-        return HashingEmbedding()
-
-
 async def run_ingest_cycle() -> dict[str, int]:
-    embedding = _build_embedding()
+    embedding = build_embedding()
     ai = create_ai_service()
     session_factory = get_session_factory()
     created_messages = 0
@@ -52,6 +26,7 @@ async def run_ingest_cycle() -> dict[str, int]:
     filtered = 0
     merged = 0
     ai_created = 0
+    ads = 0
 
     client = create_telegram_client()
     await client.connect()
@@ -64,6 +39,7 @@ async def run_ingest_cycle() -> dict[str, int]:
             "filtered": 0,
             "merged": 0,
             "ai_created": 0,
+            "ads": 0,
         }
 
     try:
@@ -86,18 +62,21 @@ async def run_ingest_cycle() -> dict[str, int]:
                     logger.exception("Ingest failed for channel %s", channel.id)
             await session.commit()
 
-            news_service = NewsService(session, embedding=embedding, ai=ai)
+            pipeline = EventPipeline(session, embedding=embedding, ai=ai)
             raw_messages = await messages_repo.list_raw_messages(limit=200)
             for message in raw_messages:
                 channel = await session.get(Channel, message.channel_id)
                 title = channel.title if channel else None
                 username = channel.username if channel else None
-                result = await news_service.process_message(
+                result = await pipeline.process_post(
                     message,
                     channel_title=title,
                     channel_username=username,
                 )
                 if result.action == "filtered":
+                    filtered += 1
+                elif result.action == "ad":
+                    ads += 1
                     filtered += 1
                 elif result.action == "merged":
                     merged += 1
@@ -118,6 +97,7 @@ async def run_ingest_cycle() -> dict[str, int]:
         "filtered": filtered,
         "merged": merged,
         "ai_created": ai_created,
+        "ads": ads,
     }
 
 
@@ -125,8 +105,6 @@ async def run_cleanup() -> int:
     settings = get_settings()
     session_factory = get_session_factory()
     async with session_factory() as session:
-        deleted = await CleanupService(session).cleanup_old_messages(
+        return await CleanupService(session).cleanup_old_messages(
             retention_days=settings.message_retention_days
         )
-    logger.info("Cleanup removed %s messages", deleted)
-    return deleted

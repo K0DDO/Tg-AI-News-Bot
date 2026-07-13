@@ -10,19 +10,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.i18n import t
 from app.bot.keyboards import detail_keyboard, feed_keyboard, sources_keyboard
-from app.bot.ui import format_feed, format_news_detail, format_sources_screen, format_why
+from app.bot.ui import format_feed, format_news_detail, format_sources_screen
 from app.config import get_settings
 from app.models import User
 from app.services.digest import NewsService
+from app.services.events import BriefBuilderService
 from app.services.preferences import FeedService, PreferencesService
 from app.services.reactions import ReactionService
 from app.services.translation import ensure_translation
 
 router = Router(name="news")
+_briefs = BriefBuilderService()
 
 
 async def _lang(session: AsyncSession, user: User) -> str:
     return await PreferencesService(session).lang(user)
+
+
+async def _event(session: AsyncSession, event_id: int):
+    return await NewsService(session).get_event(event_id)
 
 
 async def open_feed(
@@ -53,7 +59,7 @@ async def open_feed(
         if not n_ch:
             text = f"📂 {t(lang, 'no_channels_feed')}"
         else:
-            text = format_feed(lang, items)
+            text = f"⏳ {t(lang, 'feed_processing')}\n\n🎉 {t(lang, 'no_more_news')}"
     else:
         text = format_feed(lang, items)
     ids = [n.id for n in items]
@@ -135,13 +141,14 @@ async def feed_open(callback: CallbackQuery, session: AsyncSession, db_user: Use
         return
     index = max(0, min(index, len(ids) - 1))
     lang = await _lang(session, db_user)
-    news = await NewsService(session).get_news(ids[index])
+    news = await _event(session, ids[index])
     if not news:
         return
     await ensure_translation(session, news, lang)
     await FeedService(session).mark_read(db_user, news)
+    brief = _briefs.build(news, lang=lang)
     await callback.message.edit_text(
-        format_news_detail(lang, news, index=index + 1, total=len(ids)),
+        format_news_detail(lang, brief, index=index + 1, total=len(ids)),
         reply_markup=detail_keyboard(
             lang, offset=offset, index=index, total=len(ids), news_id=news.id, ids_s=ids_s
         ),
@@ -153,7 +160,7 @@ async def feed_open(callback: CallbackQuery, session: AsyncSession, db_user: Use
 async def feed_up(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     news_id = int(callback.data.split(":")[2])
     await ReactionService(session).mark_interesting(db_user.id, news_id)
-    news = await NewsService(session).get_news(news_id)
+    news = await _event(session, news_id)
     if news:
         await FeedService(session).mark_read(db_user, news)
     lang = await _lang(session, db_user)
@@ -167,7 +174,7 @@ async def feed_down(callback: CallbackQuery, session: AsyncSession, db_user: Use
     ids_s = parts[5] if len(parts) > 5 else ""
     ids = [int(x) for x in ids_s.split(",") if x]
     await ReactionService(session).mark_not_interesting(db_user.id, news_id)
-    news = await NewsService(session).get_news(news_id)
+    news = await _event(session, news_id)
     if news:
         await FeedService(session).dislike(db_user, news)
     lang = await _lang(session, db_user)
@@ -180,13 +187,14 @@ async def feed_down(callback: CallbackQuery, session: AsyncSession, db_user: Use
         return
     new_index = min(index, len(remaining) - 1)
     ids_s2 = ",".join(str(i) for i in remaining)
-    n2 = await NewsService(session).get_news(remaining[new_index])
+    n2 = await _event(session, remaining[new_index])
     if not n2:
         return
     await ensure_translation(session, n2, lang)
     await FeedService(session).mark_read(db_user, n2)
+    brief = _briefs.build(n2, lang=lang)
     await callback.message.edit_text(
-        format_news_detail(lang, n2, index=new_index + 1, total=len(remaining)),
+        format_news_detail(lang, brief, index=new_index + 1, total=len(remaining)),
         reply_markup=detail_keyboard(
             lang, offset=offset, index=new_index, total=len(remaining), news_id=n2.id, ids_s=ids_s2
         ),
@@ -197,7 +205,7 @@ async def feed_down(callback: CallbackQuery, session: AsyncSession, db_user: Use
 @router.callback_query(F.data.startswith("feed:fav:"))
 async def feed_fav(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     news_id = int(callback.data.split(":")[2])
-    news = await NewsService(session).get_news(news_id)
+    news = await _event(session, news_id)
     lang = await _lang(session, db_user)
     if not news:
         await callback.answer()
@@ -206,33 +214,34 @@ async def feed_fav(callback: CallbackQuery, session: AsyncSession, db_user: User
     await callback.answer(t(lang, "saved") if saved else t(lang, "save"))
 
 
-@router.callback_query(F.data.startswith("feed:why:"))
-async def feed_why(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
-    news_id = int(callback.data.split(":")[2])
-    news = await NewsService(session).get_news(news_id)
-    lang = await _lang(session, db_user)
-    await callback.answer()
-    if news and callback.message:
-        await callback.message.answer(format_why(lang, news))
-
-
 @router.callback_query(F.data.startswith("feed:src:"))
 async def feed_sources(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     news_id = int(callback.data.split(":")[2])
-    news = await NewsService(session).get_news(news_id)
+    news = await _event(session, news_id)
     lang = await _lang(session, db_user)
     await callback.answer()
     if not news or not callback.message:
         return
-    pairs = [(src.channel_title or "Source", src.source_url) for src in (news.sources or [])]
+    brief = _briefs.build(news, lang=lang)
+    pairs = [(s.channel_title or "Source", s.url) for s in brief.sources]
     await callback.message.answer(
-        format_sources_screen(lang, news),
+        format_sources_screen(lang, brief),
         reply_markup=sources_keyboard(pairs, lang),
         disable_web_page_preview=True,
     )
 
 
 @router.callback_query(F.data == "feed:srcback")
+async def feed_src_back(callback: CallbackQuery) -> None:
+    await callback.answer()
+    if not callback.message:
+        return
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest:
+        pass
+
+
 @router.callback_query(F.data == "noop")
 async def noop(callback: CallbackQuery) -> None:
     await callback.answer()

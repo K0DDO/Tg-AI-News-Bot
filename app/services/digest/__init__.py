@@ -1,10 +1,5 @@
-from app.services.digest.formatters import format_daily_header, format_news_card, format_sources_list
-from app.services.digest.service import NewsService, ProcessResult
+"""Compat re-exports — digest package now fronts EventPipeline."""
 
-__all__ = [
-    "NewsService",
-    "ProcessResult",
-    "format_news_card",
-    "format_sources_list",
-    "format_daily_header",
-]
+from app.services.events.pipeline import EventPipeline, NewsService, ProcessResult
+
+__all__ = ["EventPipeline", "NewsService", "ProcessResult"]

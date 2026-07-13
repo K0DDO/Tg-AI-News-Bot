@@ -13,16 +13,13 @@ from app.bot.states import SearchStates
 from app.bot.ui import format_search_answer
 from app.models import User
 from app.services.preferences import PreferencesService
-from app.services.search import SemanticSearch
+from app.services.search import SearchService
 from app.services.translation import ensure_translation
 
 router = Router(name="search")
 
 
 async def ask_search(message: Message, session: AsyncSession, db_user: User) -> None:
-    # used by home reply routing — needs state
-    from aiogram.fsm.context import FSMContext
-    # This will be called without state from home — set via wrapper
     lang = await PreferencesService(session).lang(db_user)
     await message.answer(
         f"<b>🔍 {t(lang, 'search')}</b>\n\n"
@@ -46,10 +43,11 @@ async def run_search(message: Message, session: AsyncSession, state: FSMContext,
         return
 
     wait = await message.answer(t(lang, "searching"))
-    answer, _hits, used_news = await SemanticSearch(session).search_with_answer(
+    answer, _hits, used_news = await SearchService(session).search_with_answer(
         query,
         limit=8,
         empty_message=t(lang, "search_empty"),
+        user=db_user,
     )
     await session.commit()
     for n in used_news:

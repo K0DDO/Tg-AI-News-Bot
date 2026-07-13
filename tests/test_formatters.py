@@ -1,10 +1,11 @@
-from app.services.digest.formatters import format_news_card, format_sources_list
-from app.models.news import News, NewsSource
 from decimal import Decimal
+
+from app.models.event import Event, EventSource
+from app.services.digest.formatters import format_news_card, format_sources_list
 
 
 def test_format_news_card():
-    news = News(
+    news = Event(
         id=1,
         title="Test <b>Title</b>",
         summary="Summary & more",
@@ -19,9 +20,9 @@ def test_format_news_card():
 
 
 def test_format_sources_list():
-    news = News(id=1, title="Hello", summary="S", category="General", importance_score=Decimal("1"))
+    news = Event(id=1, title="Hello", summary="S", category="General", importance_score=Decimal("1"))
     news.sources = [
-        NewsSource(id=1, news_id=1, source_url="https://t.me/c/1/2", channel_title="Chan"),
+        EventSource(id=1, event_id=1, source_url="https://t.me/c/1/2", channel_title="Chan"),
     ]
     text = format_sources_list(news)
     assert "https://t.me/c/1/2" in text

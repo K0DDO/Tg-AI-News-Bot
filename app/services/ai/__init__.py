@@ -1,14 +1,17 @@
-from app.services.ai.base import AIService, NewsAnalysisResult, SearchAnswer, TranslationResult
-from app.services.ai.factory import create_ai_service, get_ai_service, reset_ai_service_cache
-from app.services.ai.heuristic import HeuristicAIService
+from app.services.ai.base import (
+    AIService,
+    NewsAnalysisResult,
+    PostAnalysisResult,
+    SearchAnswer,
+    TranslationResult,
+)
+from app.services.ai.factory import create_ai_service
 
 __all__ = [
     "AIService",
+    "PostAnalysisResult",
     "NewsAnalysisResult",
     "SearchAnswer",
     "TranslationResult",
-    "HeuristicAIService",
     "create_ai_service",
-    "get_ai_service",
-    "reset_ai_service_cache",
 ]

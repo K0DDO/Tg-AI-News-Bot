@@ -1,15 +1,14 @@
-"""User settings and personalized feed / favorites / history."""
+"""User settings and personalized Event feed / favorites / history."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from decimal import Decimal
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import Message, News, NewsSource, User, UserChannel, UserNewsState, UserSettings
+from app.models import Channel, Event, EventSource, Message, User, UserChannel, UserEventState, UserSettings
 from app.services.ai.base import ALLOWED_CATEGORIES
 
 DEFAULT_CATEGORIES = list(ALLOWED_CATEGORIES)
@@ -89,7 +88,7 @@ class PreferencesService:
         return settings
 
     async def reset_reactions(self, user: User) -> None:
-        await self._session.execute(delete(UserNewsState).where(UserNewsState.user_id == user.id))
+        await self._session.execute(delete(UserEventState).where(UserEventState.user_id == user.id))
         from app.models import Reaction
 
         await self._session.execute(delete(Reaction).where(Reaction.user_id == user.id))
@@ -107,8 +106,7 @@ class FeedService:
         *,
         limit: int = 5,
         offset: int = 0,
-    ) -> tuple[list[News], int]:
-        """Return (page, total_matching). Personal feed from user's channels when set."""
+    ) -> tuple[list[Event], int]:
         settings = await self._prefs.get_or_create(user)
         cats = settings.enabled_categories or DEFAULT_CATEGORIES
         ignored = [t.strip().lower() for t in (settings.ignored_topics or "").split(",") if t.strip()]
@@ -117,29 +115,33 @@ class FeedService:
         if not channel_ids:
             return [], 0
 
-        allowed_news_ids = await self._news_ids_for_channels(channel_ids)
+        allowed_ids = await self._event_ids_for_channels(channel_ids)
+        # If links are missing (old data), fall back to global active events
+        # so the feed is not permanently empty for a user who already added channels.
+        use_channel_filter = bool(allowed_ids)
+
         result = await self._session.execute(
-            select(News)
-            .options(selectinload(News.sources))
-            .where(News.importance_score >= settings.min_importance)
-            .order_by(News.importance_score.desc(), News.updated_at.desc())
+            select(Event)
+            .options(selectinload(Event.sources))
+            .where(Event.status == "active")
+            .where(Event.importance_score >= settings.min_importance)
+            .order_by(Event.importance_score.desc(), Event.updated_at.desc())
             .limit(500)
         )
         items = list(result.scalars().all())
-
         states = await self._load_states(user.id)
-        filtered: list[News] = []
-        for news in items:
-            if news.id not in allowed_news_ids:
+        filtered: list[Event] = []
+        for event in items:
+            if use_channel_filter and event.id not in allowed_ids:
                 continue
-            if cats and news.category and news.category not in cats:
+            if cats and event.category and event.category not in cats:
                 continue
-            blob = f"{news.title} {news.summary} {news.topic or ''}".lower()
+            blob = f"{event.title} {event.summary} {event.topic or ''}".lower()
             if any(topic in blob for topic in ignored):
                 continue
-            if not self._should_show(news, states.get(news.id)):
+            if not self._should_show(event, states.get(event.id)):
                 continue
-            filtered.append(news)
+            filtered.append(event)
         page = filtered[offset : offset + limit]
         return page, len(filtered)
 
@@ -152,75 +154,108 @@ class FeedService:
         )
         return list(result.scalars().all())
 
-    async def _news_ids_for_channels(self, channel_ids: list[int]) -> set[int]:
-        result = await self._session.execute(
-            select(NewsSource.news_id)
-            .join(Message, Message.id == NewsSource.message_id)
-            .where(Message.channel_id.in_(channel_ids))
-        )
-        return set(result.scalars().all())
+    async def _event_ids_for_channels(self, channel_ids: list[int]) -> set[int]:
+        """Resolve events linked to user channels (by message OR source username/title)."""
+        if not channel_ids:
+            return set()
 
-    def _should_show(self, news: News, state: UserNewsState | None) -> bool:
+        ch_result = await self._session.execute(
+            select(Channel).where(Channel.id.in_(channel_ids))
+        )
+        channels = list(ch_result.scalars().all())
+        usernames = {(c.username or "").lower() for c in channels if c.username}
+        titles = {(c.title or "").lower() for c in channels if c.title}
+
+        # 1) Via live Message.channel_id (preferred)
+        via_msg = await self._session.execute(
+            select(EventSource.event_id)
+            .join(Message, Message.id == EventSource.message_id)
+            .where(Message.channel_id.in_(channel_ids))
+            .where(Message.is_advertisement.is_(False))
+        )
+        ids = set(via_msg.scalars().all())
+
+        # 2) Via source username (works after message cleanup / NULL message_id)
+        if usernames:
+            via_user = await self._session.execute(
+                select(EventSource.event_id).where(
+                    EventSource.channel_username.is_not(None),
+                    func.lower(EventSource.channel_username).in_(list(usernames)),
+                )
+            )
+            ids |= set(via_user.scalars().all())
+
+        # 3) Via channel title on source (best-effort)
+        if titles:
+            via_title = await self._session.execute(
+                select(EventSource.event_id).where(
+                    EventSource.channel_title.is_not(None),
+                    func.lower(EventSource.channel_title).in_(list(titles)),
+                )
+            )
+            ids |= set(via_title.scalars().all())
+
+        return ids
+
+    def _should_show(self, event: Event, state: UserEventState | None) -> bool:
         if state is None:
             return True
         if state.is_hidden:
             return False
         if not state.is_read:
             return True
-        # resurface only if score OR sources grew significantly
-        score_grew = float(news.importance_score) >= float(state.score_at_interaction) + RESURFACE_SCORE_DELTA
-        sources_now = news.sources_count or len(news.sources or [])
+        score_grew = float(event.importance_score) >= float(state.score_at_interaction) + RESURFACE_SCORE_DELTA
+        sources_now = event.sources_count or len(event.sources or [])
         sources_grew = sources_now >= int(state.sources_at_interaction) + RESURFACE_SOURCES_DELTA
         return score_grew or sources_grew
 
-    async def _load_states(self, user_id: int) -> dict[int, UserNewsState]:
+    async def _load_states(self, user_id: int) -> dict[int, UserEventState]:
         result = await self._session.execute(
-            select(UserNewsState).where(UserNewsState.user_id == user_id)
+            select(UserEventState).where(UserEventState.user_id == user_id)
         )
-        return {s.news_id: s for s in result.scalars().all()}
+        return {s.event_id: s for s in result.scalars().all()}
 
-    async def _get_or_create_state(self, user: User, news: News) -> UserNewsState:
+    async def _get_or_create_state(self, user: User, event: Event) -> UserEventState:
         result = await self._session.execute(
-            select(UserNewsState).where(
-                UserNewsState.user_id == user.id,
-                UserNewsState.news_id == news.id,
+            select(UserEventState).where(
+                UserEventState.user_id == user.id,
+                UserEventState.event_id == event.id,
             )
         )
         state = result.scalar_one_or_none()
         if state is None:
-            state = UserNewsState(user_id=user.id, news_id=news.id)
+            state = UserEventState(user_id=user.id, event_id=event.id)
             self._session.add(state)
             await self._session.flush()
         return state
 
-    async def mark_read(self, user: User, news: News, *, hidden: bool = False) -> None:
-        state = await self._get_or_create_state(user, news)
+    async def mark_read(self, user: User, event: Event, *, hidden: bool = False) -> None:
+        state = await self._get_or_create_state(user, event)
         state.is_read = True
         state.read_at = datetime.now(timezone.utc)
         if hidden:
             state.is_hidden = True
-        state.score_at_interaction = news.importance_score
-        state.sources_at_interaction = news.sources_count or len(news.sources or [])
+        state.score_at_interaction = event.importance_score
+        state.sources_at_interaction = event.sources_count or len(event.sources or [])
         await self._session.commit()
 
-    async def dislike(self, user: User, news: News) -> None:
-        # personal hide only — do not mutate global score for everyone
-        await self.mark_read(user, news, hidden=True)
+    async def dislike(self, user: User, event: Event) -> None:
+        await self.mark_read(user, event, hidden=True)
 
-    async def toggle_favorite(self, user: User, news: News) -> bool:
-        state = await self._get_or_create_state(user, news)
+    async def toggle_favorite(self, user: User, event: Event) -> bool:
+        state = await self._get_or_create_state(user, event)
         state.is_favorite = not state.is_favorite
         state.favorited_at = datetime.now(timezone.utc) if state.is_favorite else None
         await self._session.commit()
         return state.is_favorite
 
-    async def list_favorites(self, user: User, *, limit: int = 20) -> list[News]:
+    async def list_favorites(self, user: User, *, limit: int = 20) -> list[Event]:
         result = await self._session.execute(
-            select(News)
-            .join(UserNewsState, UserNewsState.news_id == News.id)
-            .options(selectinload(News.sources))
-            .where(UserNewsState.user_id == user.id, UserNewsState.is_favorite.is_(True))
-            .order_by(UserNewsState.favorited_at.desc().nulls_last())
+            select(Event)
+            .join(UserEventState, UserEventState.event_id == Event.id)
+            .options(selectinload(Event.sources))
+            .where(UserEventState.user_id == user.id, UserEventState.is_favorite.is_(True))
+            .order_by(UserEventState.favorited_at.desc().nulls_last())
             .limit(limit)
         )
         return list(result.scalars().all())
@@ -232,16 +267,16 @@ class FeedService:
         limit: int = 30,
         since: datetime | None = None,
         query: str | None = None,
-    ) -> list[News]:
+    ) -> list[Event]:
         stmt = (
-            select(News)
-            .join(UserNewsState, UserNewsState.news_id == News.id)
-            .options(selectinload(News.sources))
-            .where(UserNewsState.user_id == user.id, UserNewsState.is_read.is_(True))
+            select(Event)
+            .join(UserEventState, UserEventState.event_id == Event.id)
+            .options(selectinload(Event.sources))
+            .where(UserEventState.user_id == user.id, UserEventState.is_read.is_(True))
         )
         if since is not None:
-            stmt = stmt.where(UserNewsState.read_at >= since)
-        stmt = stmt.order_by(UserNewsState.read_at.desc().nulls_last()).limit(limit * 3 if query else limit)
+            stmt = stmt.where(UserEventState.read_at >= since)
+        stmt = stmt.order_by(UserEventState.read_at.desc().nulls_last()).limit(limit * 3 if query else limit)
         result = await self._session.execute(stmt)
         items = list(result.scalars().all())
         q = (query or "").strip().lower()

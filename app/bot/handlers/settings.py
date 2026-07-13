@@ -24,11 +24,27 @@ from app.services.preferences import PreferencesService
 router = Router(name="settings")
 
 
-async def open_settings(message: Message, session: AsyncSession, user: User) -> None:
+async def open_settings(
+    message: Message,
+    session: AsyncSession,
+    user: User,
+    *,
+    edit: bool = False,
+) -> None:
+    from aiogram.exceptions import TelegramBadRequest
+
     prefs = PreferencesService(session)
     settings = await prefs.get_or_create(user)
     lang = settings.language or "ru"
-    await message.answer(format_settings(lang, settings), reply_markup=settings_keyboard(lang))
+    text = format_settings(lang, settings)
+    kb = settings_keyboard(lang)
+    if edit:
+        try:
+            await message.edit_text(text, reply_markup=kb)
+            return
+        except TelegramBadRequest:
+            pass
+    await message.answer(text, reply_markup=kb)
 
 
 @router.message(Command("settings"))
@@ -40,14 +56,15 @@ async def cmd_settings(message: Message, session: AsyncSession, db_user: User) -
 async def set_back(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     await callback.answer()
     if callback.message:
-        await open_settings(callback.message, session, db_user)
+        await open_settings(callback.message, session, db_user, edit=True)
 
 
 @router.callback_query(F.data == "set:lang")
-async def set_lang_menu(callback: CallbackQuery) -> None:
+async def set_lang_menu(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    lang = await PreferencesService(session).lang(db_user)
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text("🌐", reply_markup=language_keyboard())
+        await callback.message.edit_text(f"🌐 {t(lang, 'language')}", reply_markup=language_keyboard())
 
 
 @router.callback_query(F.data == "set:interval")
@@ -55,7 +72,10 @@ async def set_interval_menu(callback: CallbackQuery, session: AsyncSession, db_u
     lang = await PreferencesService(session).lang(db_user)
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text("🕒", reply_markup=interval_keyboard(lang))
+        await callback.message.edit_text(
+            f"🕒 {t(lang, 'set_interval')}",
+            reply_markup=interval_keyboard(lang),
+        )
 
 
 @router.callback_query(F.data.startswith("set:iv:"))
@@ -64,7 +84,7 @@ async def set_interval(callback: CallbackQuery, session: AsyncSession, db_user: 
     await PreferencesService(session).set_interval(db_user, minutes)
     await callback.answer("OK")
     if callback.message:
-        await open_settings(callback.message, session, db_user)
+        await open_settings(callback.message, session, db_user, edit=True)
 
 
 @router.callback_query(F.data == "set:min")
@@ -72,7 +92,10 @@ async def set_min_menu(callback: CallbackQuery, session: AsyncSession, db_user: 
     lang = await PreferencesService(session).lang(db_user)
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text("⭐", reply_markup=min_importance_keyboard(lang))
+        await callback.message.edit_text(
+            f"⭐ {t(lang, 'set_min')}",
+            reply_markup=min_importance_keyboard(lang),
+        )
 
 
 @router.callback_query(F.data.startswith("set:mi:"))
@@ -81,7 +104,7 @@ async def set_min(callback: CallbackQuery, session: AsyncSession, db_user: User)
     await PreferencesService(session).set_min_importance(db_user, value)
     await callback.answer("OK")
     if callback.message:
-        await open_settings(callback.message, session, db_user)
+        await open_settings(callback.message, session, db_user, edit=True)
 
 
 @router.callback_query(F.data == "set:cats")
@@ -92,10 +115,9 @@ async def set_cats(callback: CallbackQuery, session: AsyncSession, db_user: User
     await callback.answer()
     if callback.message:
         await callback.message.edit_text(
-            "📂",
+            f"📂 {t(lang, 'set_cats')}",
             reply_markup=categories_keyboard(lang, settings.enabled_categories),
         )
-
 
 @router.callback_query(F.data.startswith("set:cat:"))
 async def toggle_cat(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
@@ -137,3 +159,30 @@ async def privacy(callback: CallbackQuery, session: AsyncSession, db_user: User)
     await callback.answer()
     if callback.message:
         await callback.message.answer(format_privacy(lang))
+
+
+@router.callback_query(F.data == "set:channels")
+async def set_channels(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    from app.bot.handlers.channels import channels_home
+
+    await callback.answer()
+    if callback.message:
+        await channels_home(callback.message, session, db_user)
+
+
+@router.callback_query(F.data == "set:favorites")
+async def set_favorites(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    from app.bot.handlers.library import show_favorites
+
+    await callback.answer()
+    if callback.message:
+        await show_favorites(callback.message, session, db_user)
+
+
+@router.callback_query(F.data == "set:history")
+async def set_history(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    from app.bot.handlers.library import show_history
+
+    await callback.answer()
+    if callback.message:
+        await show_history(callback.message, session, db_user)

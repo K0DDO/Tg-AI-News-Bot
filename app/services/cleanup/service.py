@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Message, MessageStatus, NewsSource
+from app.models import EventSource, Message, MessageStatus
 
 
 class CleanupService:
@@ -16,11 +16,10 @@ class CleanupService:
 
     async def cleanup_old_messages(self, *, retention_days: int) -> int:
         cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
-        # Detach FK references first so SET NULL is explicit
         await self._session.execute(
-            update(NewsSource)
+            update(EventSource)
             .where(
-                NewsSource.message_id.in_(
+                EventSource.message_id.in_(
                     select(Message.id).where(
                         Message.created_at < cutoff,
                         Message.status.in_(

@@ -10,13 +10,13 @@ from app.database.base import Base
 from app.models import (  # noqa: F401 — register models on metadata
     AiUsageLog,
     Channel,
+    Event,
+    EventSource,
     Message,
-    News,
-    NewsSource,
     Reaction,
     User,
     UserChannel,
-    UserNewsState,
+    UserEventState,
     UserSettings,
 )
 

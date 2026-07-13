@@ -1,3 +1,7 @@
+"""Level 2 — Event (canonical information event) + EventSource evidence links."""
+
+from __future__ import annotations
+
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -12,22 +16,25 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from app.database.base import Base
 
 
-class News(Base):
-    """Aggregated / clustered news item shown in digests."""
+class Event(Base):
+    """One concrete news event; aggregates many Telegram posts."""
 
-    __tablename__ = "news"
+    __tablename__ = "events"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
     category: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
-    topic: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    # Full event sentence, NOT a single word
+    topic: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
     why_important: Mapped[str | None] = mapped_column(Text, nullable=True)
+    entities: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    keywords: Mapped[list | None] = mapped_column(JSON, nullable=True)
     importance_score: Mapped[Decimal] = mapped_column(
         Numeric(4, 2),
         default=Decimal("0"),
@@ -35,8 +42,19 @@ class News(Base):
         nullable=False,
         index=True,
     )
-    sources_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     embedding: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default="active",
+        server_default="active",
+        nullable=False,
+        index=True,
+    )
+    timeline: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    sources_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    posts_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    ai_reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
+    related_event_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     title_i18n: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     summary_i18n: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -53,13 +71,13 @@ class News(Base):
     )
 
     sources = relationship(
-        "NewsSource",
-        back_populates="news",
+        "EventSource",
+        back_populates="event",
         cascade="all, delete-orphan",
     )
     reactions = relationship(
         "Reaction",
-        back_populates="news",
+        back_populates="event",
         cascade="all, delete-orphan",
     )
 
@@ -74,15 +92,15 @@ class News(Base):
         return self.summary
 
     def __repr__(self) -> str:
-        return f"<News id={self.id} title={self.title[:40]!r} score={self.importance_score}>"
+        return f"<Event id={self.id} title={self.title[:40]!r} score={self.importance_score}>"
 
 
-class NewsSource(Base):
-    __tablename__ = "news_sources"
+class EventSource(Base):
+    __tablename__ = "event_sources"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    news_id: Mapped[int] = mapped_column(
-        ForeignKey("news.id", ondelete="CASCADE"),
+    event_id: Mapped[int] = mapped_column(
+        ForeignKey("events.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -100,5 +118,14 @@ class NewsSource(Base):
         nullable=False,
     )
 
-    news = relationship("News", back_populates="sources")
-    message = relationship("Message", back_populates="news_sources")
+    event = relationship("Event", back_populates="sources")
+    message = relationship("Message", back_populates="event_sources")
+
+    # compat aliases
+    news_id = synonym("event_id")
+    news = synonym("event")
+
+
+# Compat aliases for one release
+News = Event
+NewsSource = EventSource

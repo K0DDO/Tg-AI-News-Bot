@@ -13,12 +13,13 @@ def test_build_message_url_without_username():
 
 
 def test_models_import():
-    from app.models import Channel, Message, News, NewsSource, Reaction, User, UserChannel
+    from app.models import Channel, Event, EventSource, Message, Reaction, TelegramPost, User, UserChannel
 
     assert User.__tablename__ == "users"
     assert Channel.__tablename__ == "channels"
     assert UserChannel.__tablename__ == "user_channels"
     assert Message.__tablename__ == "messages"
-    assert News.__tablename__ == "news"
-    assert NewsSource.__tablename__ == "news_sources"
+    assert TelegramPost is Message
+    assert Event.__tablename__ == "events"
+    assert EventSource.__tablename__ == "event_sources"
     assert Reaction.__tablename__ == "reactions"

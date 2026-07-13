@@ -1,13 +1,15 @@
-"""Channels UX."""
+"""Channels UX — list edits in place."""
 
 from __future__ import annotations
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.i18n import t
 from app.bot.keyboards import channel_list_keyboard, channels_menu_keyboard
 from app.bot.states import ChannelBulkStates
 from app.models import User
@@ -21,7 +23,9 @@ router = Router(name="channels")
 async def channels_home(message: Message, session: AsyncSession, user: User) -> None:
     lang = await PreferencesService(session).lang(user)
     await message.answer(
-        "📂\n@channel1\n@channel2\nhttps://t.me/channel3",
+        f"<b>📂 {t(lang, 'channels')}</b>\n\n"
+        f"{t(lang, 'channels_hint')}\n\n"
+        f"<code>@channel1\n@channel2\nhttps://t.me/channel3</code>",
         reply_markup=channels_menu_keyboard(lang),
     )
 
@@ -32,19 +36,29 @@ async def cmd_channels(message: Message, session: AsyncSession, db_user: User) -
 
 
 @router.callback_query(F.data == "ch:bulk")
-async def bulk_start(callback: CallbackQuery, state: FSMContext) -> None:
+async def bulk_start(callback: CallbackQuery, state: FSMContext, session: AsyncSession, db_user: User) -> None:
+    lang = await PreferencesService(session).lang(db_user)
     await state.set_state(ChannelBulkStates.waiting_list)
     await callback.answer()
     if callback.message:
-        await callback.message.answer("<code>@a\n@b\nhttps://t.me/c</code>")
+        text = (
+            f"<b>➕ {t(lang, 'ch_add')}</b>\n\n"
+            f"{t(lang, 'channels_hint')}\n\n"
+            f"<code>@a\n@b\nhttps://t.me/c</code>"
+        )
+        try:
+            await callback.message.edit_text(text)
+        except TelegramBadRequest:
+            await callback.message.answer(text)
 
 
 @router.message(ChannelBulkStates.waiting_list)
 async def bulk_import(message: Message, session: AsyncSession, db_user: User, state: FSMContext) -> None:
+    lang = await PreferencesService(session).lang(db_user)
     await state.clear()
     refs = parse_channel_refs(message.text or "")
     if not refs:
-        await message.answer("—")
+        await message.answer(t(lang, "ch_parse_fail"))
         return
     service = ChannelService(session)
     ok, fail = 0, []
@@ -63,21 +77,37 @@ async def bulk_import(message: Message, session: AsyncSession, db_user: User, st
             ok += 1
         except Exception:
             fail.append(username)
-    await message.answer(f"+{ok}" + (f" / fail: {', '.join(fail[:10])}" if fail else ""))
-    await _show_list(message, session, db_user)
+    summary = f"✅ +{ok}" + (f"\n❌ {', '.join(fail[:10])}" if fail else "")
+    await message.answer(summary)
+    await _show_list(message, session, db_user, edit=False)
 
 
 @router.callback_query(F.data == "ch:list")
 async def ch_list(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     await callback.answer()
     if callback.message:
-        await _show_list(callback.message, session, db_user)
+        await _show_list(callback.message, session, db_user, edit=True)
 
 
-async def _show_list(message: Message, session: AsyncSession, user: User) -> None:
+async def _show_list(
+    message: Message,
+    session: AsyncSession,
+    user: User,
+    *,
+    edit: bool = False,
+) -> None:
+    lang = await PreferencesService(session).lang(user)
     pairs = await ChannelService(session).list_user_channels(user.id)
     items = [(ch.id, ch.title, ch.enabled) for ch, _ in pairs]
-    await message.answer(f"📋 {len(items)}", reply_markup=channel_list_keyboard(items))
+    text = f"<b>📋 {t(lang, 'ch_list')}</b>\n\n{t(lang, 'ch_list_hint')}: <b>{len(items)}</b>"
+    kb = channel_list_keyboard(items, lang)
+    if edit:
+        try:
+            await message.edit_text(text, reply_markup=kb)
+            return
+        except TelegramBadRequest:
+            pass
+    await message.answer(text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("ch:tog:"))
@@ -89,7 +119,7 @@ async def ch_toggle(callback: CallbackQuery, session: AsyncSession, db_user: Use
         await service.set_channel_enabled(channel_id, not channel.enabled)
     await callback.answer("OK")
     if callback.message:
-        await _show_list(callback.message, session, db_user)
+        await _show_list(callback.message, session, db_user, edit=True)
 
 
 @router.callback_query(F.data.startswith("ch:del:"))
@@ -98,4 +128,4 @@ async def ch_del(callback: CallbackQuery, session: AsyncSession, db_user: User) 
     await ChannelService(session).remove_user_channel(db_user.id, channel_id)
     await callback.answer("OK")
     if callback.message:
-        await _show_list(callback.message, session, db_user)
+        await _show_list(callback.message, session, db_user, edit=True)

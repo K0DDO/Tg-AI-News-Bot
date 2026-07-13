@@ -1,11 +1,9 @@
-"""Keyword search over News (implements SearchPort; swap for semantic later)."""
-
-from __future__ import annotations
+"""Keyword fallback over Events (not posts)."""
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import News
+from app.models import Event
 from app.services.ports import SearchHit
 
 
@@ -19,25 +17,25 @@ class KeywordSearch:
             return []
         pattern = f"%{q}%"
         result = await self._session.execute(
-            select(News)
+            select(Event)
+            .where(Event.status == "active")
             .where(
                 or_(
-                    News.title.ilike(pattern),
-                    News.summary.ilike(pattern),
-                    News.category.ilike(pattern),
+                    Event.title.ilike(pattern),
+                    Event.summary.ilike(pattern),
+                    Event.category.ilike(pattern),
+                    Event.topic.ilike(pattern),
                 )
             )
-            .order_by(News.importance_score.desc(), News.created_at.desc())
+            .order_by(Event.importance_score.desc(), Event.created_at.desc())
             .limit(limit)
         )
-        hits: list[SearchHit] = []
-        for news in result.scalars().all():
-            hits.append(
-                SearchHit(
-                    news_id=news.id,
-                    score=float(news.importance_score),
-                    title=news.title,
-                    summary=news.summary,
-                )
+        return [
+            SearchHit(
+                news_id=event.id,
+                score=float(event.importance_score),
+                title=event.title,
+                summary=event.summary,
             )
-        return hits
+            for event in result.scalars().all()
+        ]

@@ -1,4 +1,5 @@
 from app.bot.ui.texts import (
+    circled,
     escape,
     format_feed,
     format_home,
@@ -7,12 +8,15 @@ from app.bot.ui.texts import (
     format_search_answer,
     format_settings,
     format_sources_screen,
+    format_timeline,
     format_trends,
     format_why,
     onboarding_steps,
+    to_brief,
 )
 
 __all__ = [
+    "circled",
     "escape",
     "format_feed",
     "format_home",
@@ -21,7 +25,9 @@ __all__ = [
     "format_search_answer",
     "format_settings",
     "format_sources_screen",
+    "format_timeline",
     "format_trends",
     "format_why",
     "onboarding_steps",
+    "to_brief",
 ]

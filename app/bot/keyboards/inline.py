@@ -1,4 +1,4 @@
-"""Inline keyboards for Briefly."""
+"""Inline keyboards for Briefly — emoji + short labels."""
 
 from __future__ import annotations
 
@@ -64,9 +64,15 @@ def detail_keyboard(
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="◀️", callback_data=f"feed:open:{offset}:{prev_i}:{ids_s}"),
+                InlineKeyboardButton(
+                    text=f"◀️ {t(lang, 'prev')}",
+                    callback_data=f"feed:open:{offset}:{prev_i}:{ids_s}",
+                ),
                 InlineKeyboardButton(text=f"{index + 1} / {total}", callback_data="noop"),
-                InlineKeyboardButton(text="▶️", callback_data=f"feed:open:{offset}:{next_i}:{ids_s}"),
+                InlineKeyboardButton(
+                    text=f"{t(lang, 'next')} ▶️",
+                    callback_data=f"feed:open:{offset}:{next_i}:{ids_s}",
+                ),
             ],
             [
                 InlineKeyboardButton(
@@ -80,11 +86,10 @@ def detail_keyboard(
             ],
             [
                 InlineKeyboardButton(text=f"⭐ {t(lang, 'save')}", callback_data=f"feed:fav:{news_id}"),
-                InlineKeyboardButton(text=f"❓ {t(lang, 'why')}", callback_data=f"feed:why:{news_id}"),
-                InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data=f"feed:back:{offset}"),
+                InlineKeyboardButton(text=f"📡 {t(lang, 'sources')}", callback_data=f"feed:src:{news_id}"),
             ],
             [
-                InlineKeyboardButton(text=f"📡 {t(lang, 'sources')}", callback_data=f"feed:src:{news_id}"),
+                InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data=f"feed:back:{offset}"),
             ],
         ]
     )
@@ -118,19 +123,26 @@ def onboarding_keyboard(lang: str, step: int, total: int) -> InlineKeyboardMarku
             inline_keyboard=[[InlineKeyboardButton(text=f"🏠 {t(lang, 'back_home')}", callback_data="nav:home")]]
         )
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="→", callback_data=f"onb:{step + 1}")]]
+        inline_keyboard=[[InlineKeyboardButton(text=f"➡ {t(lang, 'next')}", callback_data=f"onb:{step + 1}")]]
     )
 
 
 def settings_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [
+                InlineKeyboardButton(text=f"📂 {t(lang, 'channels')}", callback_data="set:channels"),
+                InlineKeyboardButton(text=f"⭐ {t(lang, 'favorites')}", callback_data="set:favorites"),
+            ],
+            [InlineKeyboardButton(text=f"📚 {t(lang, 'history')}", callback_data="set:history")],
             [InlineKeyboardButton(text=f"🌐 {t(lang, 'language')}", callback_data="set:lang")],
-            [InlineKeyboardButton(text="🕒", callback_data="set:interval"),
-             InlineKeyboardButton(text="⭐", callback_data="set:min"),
-             InlineKeyboardButton(text="📂", callback_data="set:cats")],
-            [InlineKeyboardButton(text="🔕", callback_data="set:ignore")],
-            [InlineKeyboardButton(text="📊", callback_data="set:reset")],
+            [
+                InlineKeyboardButton(text=f"🕒 {t(lang, 'set_interval')}", callback_data="set:interval"),
+                InlineKeyboardButton(text=f"⭐ {t(lang, 'set_min')}", callback_data="set:min"),
+            ],
+            [InlineKeyboardButton(text=f"📂 {t(lang, 'set_cats')}", callback_data="set:cats")],
+            [InlineKeyboardButton(text=f"🔕 {t(lang, 'set_ignore')}", callback_data="set:ignore")],
+            [InlineKeyboardButton(text=f"📊 {t(lang, 'set_reset')}", callback_data="set:reset")],
             [InlineKeyboardButton(text=f"📖 {t(lang, 'how_to')}", callback_data="onb:0")],
             [InlineKeyboardButton(text=f"🔒 {t(lang, 'privacy')}", callback_data="set:privacy")],
         ]
@@ -186,22 +198,22 @@ def categories_keyboard(lang: str, enabled: list[str] | None) -> InlineKeyboardM
 def channels_menu_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="➕", callback_data="ch:bulk")],
-            [InlineKeyboardButton(text="📋", callback_data="ch:list")],
+            [InlineKeyboardButton(text=f"➕ {t(lang, 'ch_add')}", callback_data="ch:bulk")],
+            [InlineKeyboardButton(text=f"📋 {t(lang, 'ch_list')}", callback_data="ch:list")],
         ]
     )
 
 
-def channel_list_keyboard(items: list[tuple[int, str, bool]]) -> InlineKeyboardMarkup:
+def channel_list_keyboard(items: list[tuple[int, str, bool]], lang: str = "ru") -> InlineKeyboardMarkup:
     rows = []
     for channel_id, title, enabled in items:
         status = "✅" if enabled else "⏸"
-        short = title[:24] + ("…" if len(title) > 24 else "")
+        short = title[:22] + ("…" if len(title) > 22 else "")
         rows.append(
             [
                 InlineKeyboardButton(text=f"{status} {short}", callback_data=f"ch:tog:{channel_id}"),
-                InlineKeyboardButton(text="🗑", callback_data=f"ch:del:{channel_id}"),
+                InlineKeyboardButton(text=f"🗑 {t(lang, 'delete')}", callback_data=f"ch:del:{channel_id}"),
             ]
         )
-    rows.append([InlineKeyboardButton(text="➕", callback_data="ch:bulk")])
+    rows.append([InlineKeyboardButton(text=f"➕ {t(lang, 'ch_add')}", callback_data="ch:bulk")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import AiUsageLog, Channel, Message, MessageStatus, News, NewsSource, User
+from app.models import AiUsageLog, Channel, Event, EventSource, Message, MessageStatus, User
 
 
 class StatsService:
@@ -15,9 +15,9 @@ class StatsService:
     async def snapshot(self) -> dict[str, int]:
         channels = await self._count(Channel)
         messages = await self._count(Message)
-        news = await self._count(News)
+        news = await self._count(Event)
         users = await self._count(User)
-        sources = await self._count(NewsSource)
+        sources = await self._count(EventSource)
         filtered = await self._session.scalar(
             select(func.count()).select_from(Message).where(
                 Message.status == MessageStatus.FILTERED_OUT.value
@@ -30,13 +30,23 @@ class StatsService:
         )
         ai_requests = await self._count(AiUsageLog)
         ai_analyze = await self._session.scalar(
-            select(func.count()).select_from(AiUsageLog).where(
-                AiUsageLog.operation == "analyze_message"
+            select(func.count())
+            .select_from(AiUsageLog)
+            .where(
+                or_(
+                    AiUsageLog.operation == "analyze_message",
+                    AiUsageLog.operation == "analyze_post",
+                )
             )
         )
         ai_search = await self._session.scalar(
-            select(func.count()).select_from(AiUsageLog).where(
-                AiUsageLog.operation == "answer_search"
+            select(func.count())
+            .select_from(AiUsageLog)
+            .where(
+                or_(
+                    AiUsageLog.operation == "answer_search",
+                    AiUsageLog.operation == "answer_question",
+                )
             )
         )
         return {

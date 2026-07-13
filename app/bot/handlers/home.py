@@ -12,11 +12,11 @@ from aiogram.types import CallbackQuery, FSInputFile, Message
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.i18n import btn_channels, btn_favorites, btn_feed, btn_history, btn_search, btn_settings, btn_trends, t
+from app.bot.i18n import btn_feed, btn_search, btn_settings, btn_trends, t
 from app.bot.keyboards import home_keyboard, language_keyboard, main_menu, onboarding_keyboard
 from app.bot.ui import format_home, onboarding_steps
+from app.models import Event, User
 from app.models import Message as DbMessage
-from app.models import News, User
 from app.services.preferences import PreferencesService
 
 router = Router(name="home")
@@ -33,12 +33,12 @@ async def _today_stats(session: AsyncSession):
         select(func.count()).select_from(DbMessage).where(DbMessage.created_at >= since)
     )
     news_count = await session.scalar(
-        select(func.count()).select_from(News).where(News.created_at >= since)
+        select(func.count()).select_from(Event).where(Event.created_at >= since)
     )
     avg = await session.scalar(
-        select(func.avg(News.importance_score)).where(News.created_at >= since)
+        select(func.avg(Event.importance_score)).where(Event.created_at >= since)
     )
-    last = await session.scalar(select(func.max(News.updated_at)))
+    last = await session.scalar(select(func.max(Event.updated_at)))
     return int(messages or 0), int(news_count or 0), float(avg or 0), last
 
 
@@ -127,13 +127,6 @@ async def reply_search(message: Message, session: AsyncSession, db_user: User, s
     await ask_search(message, session, db_user)
 
 
-@router.message(F.text.func(lambda s: bool(s) and any(s == btn_channels(l) for l in ("ru", "en", "de", "es"))))
-async def reply_channels(message: Message, session: AsyncSession, db_user: User) -> None:
-    from app.bot.handlers.channels import channels_home
-
-    await channels_home(message, session, db_user)
-
-
 @router.message(F.text.func(lambda s: bool(s) and any(s == btn_settings(l) for l in ("ru", "en", "de", "es"))))
 async def reply_settings(message: Message, session: AsyncSession, db_user: User) -> None:
     from app.bot.handlers.settings import open_settings
@@ -146,17 +139,3 @@ async def reply_trends(message: Message, session: AsyncSession, db_user: User) -
     from app.bot.handlers.trends import show_trends_msg
 
     await show_trends_msg(message, session, db_user)
-
-
-@router.message(F.text.func(lambda s: bool(s) and any(s == btn_favorites(l) for l in ("ru", "en", "de", "es"))))
-async def reply_fav(message: Message, session: AsyncSession, db_user: User) -> None:
-    from app.bot.handlers.library import show_favorites
-
-    await show_favorites(message, session, db_user)
-
-
-@router.message(F.text.func(lambda s: bool(s) and any(s == btn_history(l) for l in ("ru", "en", "de", "es"))))
-async def reply_hist(message: Message, session: AsyncSession, db_user: User) -> None:
-    from app.bot.handlers.library import show_history
-
-    await show_history(message, session, db_user)

@@ -1,11 +1,11 @@
-"""Format digest cards for Telegram."""
+"""Legacy formatters — prefer BriefBuilder + bot UI texts."""
 
 from __future__ import annotations
 
-from app.models import News
+from app.models import Event
 
 
-def format_news_card(news: News, *, source_count: int | None = None, index: int | None = None) -> str:
+def format_news_card(news: Event, *, source_count: int | None = None, index: int | None = None) -> str:
     sources = source_count if source_count is not None else len(news.sources or [])
     score = float(news.importance_score)
     category = news.category or "Other"
@@ -23,7 +23,7 @@ def format_daily_header(count: int) -> str:
     return f"🗓 <b>Лента дня</b>\nТоп-{count} по важности за последние 24 часа:"
 
 
-def format_sources_list(news: News) -> str:
+def format_sources_list(news: Event) -> str:
     lines = [f"📡 <b>Источники:</b> {_escape(news.title)}", ""]
     for i, src in enumerate(news.sources or [], start=1):
         title = src.channel_title or "Источник"

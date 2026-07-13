@@ -1,4 +1,4 @@
-"""User preferences and per-user news read state."""
+"""User preferences and per-user event read state."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from app.database.base import Base
 
@@ -58,15 +58,15 @@ class UserSettings(Base):
     user = relationship("User", back_populates="settings")
 
 
-class UserNewsState(Base):
-    __tablename__ = "user_news_states"
+class UserEventState(Base):
+    __tablename__ = "user_event_states"
     __table_args__ = (
-        UniqueConstraint("user_id", "news_id", name="uq_user_news_states_user_id_news_id"),
+        UniqueConstraint("user_id", "event_id", name="uq_user_event_states_user_id_event_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    news_id: Mapped[int] = mapped_column(ForeignKey("news.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     is_hidden: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
@@ -90,3 +90,8 @@ class UserNewsState(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+    news_id = synonym("event_id")
+
+
+UserNewsState = UserEventState

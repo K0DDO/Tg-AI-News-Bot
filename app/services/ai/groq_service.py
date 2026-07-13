@@ -7,7 +7,7 @@ from typing import Any, Sequence
 
 from app.services.ai.base import (
     ALLOWED_CATEGORIES,
-    NewsAnalysisResult,
+    PostAnalysisResult,
     SearchAnswer,
     TranslationResult,
 )
@@ -16,31 +16,49 @@ from app.services.ai.heuristic import HeuristicAIService
 
 logger = logging.getLogger(__name__)
 
-_ANALYZE_SYSTEM = """You analyze Telegram channel posts for a news product called Briefly.
+_ANALYZE_SYSTEM = """You analyze ONE Telegram channel post for Briefly (an event news product).
 Return ONLY valid JSON with keys:
 is_news (bool),
-title (string, concise headline in the SAME language as the source when possible),
-summary (string, 2-4 sentences),
-category (ONE of: AI, Technology, Hardware, Software, Science, Business, Other),
-topic (string, short entity/topic name e.g. "NVIDIA", "iPhone 18", "OpenAI" — not a full sentence),
+is_advertisement (bool),
+title (string, concise headline about THIS post only),
+summary (string, 2-4 sentences about THIS post only),
+category (ONE of: AI, Technology, Hardware, Software, Science, Business, Other — invent only if necessary),
+topic (string: FULL event sentence for THIS post, e.g. "Destin Daniel Cretton снимет фильм по Наруто" — NEVER a single word),
+entities (array of strings: brands/products/people from THIS post only),
+keywords (array of short search keywords from THIS post),
 importance_score (number 0-10),
-why_important (string, 1-3 short bullet-like reasons separated by "; "),
+why_important (string, short reasons separated by "; "),
+reasoning (string, brief why this score),
+language (string: ru|en|de|es|other),
 reason (string|null — only when is_news=false).
 
-Prefer existing category values. Only invent a new category if truly necessary (rare).
-is_news=false for ads, promo codes, subscribe CTAs, spam, personal chatter.
+CRITICAL fidelity rules for title/summary/topic:
+- Use ONLY facts explicitly present in the message text.
+- NEVER invent connections between unrelated franchises, films, games, or brands.
+- NEVER write that one work is "based on" / "по" another unless the text says that.
+- If the post says a director was hired for a Naruto film — say exactly that. Do NOT mention Spider-Man or any other title not in the text.
+- Ignore channel footers, "also read", ads, and unrelated neighboring headlines if they appear in the paste.
+- Prefer short, precise summary over creative rewriting.
+
+is_advertisement=true for promo codes, subscribe CTAs, sales spam.
+is_news=false for ads, chatter, non-news.
+Prefer existing categories. Analyze once — results will be reused.
 """
 
-_SEARCH_SYSTEM = """You are a careful news assistant for Briefly.
-You receive a user query and candidate news snippets with IDs.
+_SEARCH_SYSTEM = """You are a careful event news assistant for Briefly.
+You receive a user query and candidate EVENT snippets with IDs (not raw Telegram posts).
 Rules:
 1) Use ONLY the provided snippets. Never invent facts.
-2) First decide which candidates are truly relevant to the query.
-3) If NONE are relevant, return JSON:
+2) Decide which events are truly relevant to the query entities/topic.
+3) Reject ads, off-topic, and random brands that do not match the query.
+4) NEVER merge unrelated events into one story (e.g. do not claim a Naruto film is based on Spider-Man).
+5) If several events are relevant, summarize them as separate facts — do not invent causal links between them.
+6) If NONE are relevant, return JSON:
 {"relevant": false, "answer": "По вашему запросу релевантных новостей найдено не было.", "used_ids": []}
-4) If some are relevant, return JSON:
-{"relevant": true, "answer": "2-6 sentences answering the query", "used_ids": [ids...]}
+7) If some are relevant, return JSON:
+{"relevant": true, "answer": "2-6 sentences answering the query using only those events", "used_ids": [ids...]}
 Answer language: match the user query language.
+Secondary quality check: before relevant=true, verify every used_id matches the query and the answer does not invent cross-event links.
 """
 
 _LANG_NAMES = {
@@ -58,21 +76,22 @@ class GroqAIService:
         self._client = client
         self._fallback = HeuristicAIService()
 
-    async def analyze_message(
+    async def analyze_post(
         self,
         text: str,
         *,
         source_count: int = 1,
         channel_title: str | None = None,
-    ) -> NewsAnalysisResult:
+    ) -> PostAnalysisResult:
         clipped = (text or "").strip()[:4000]
         if not clipped:
-            return NewsAnalysisResult(
+            return PostAnalysisResult(
                 is_news=False,
+                is_advertisement=False,
                 title="",
                 summary="",
                 category="Other",
-                importance_score=0.0,
+                topic=None,
                 reason="empty",
             )
         user = (
@@ -84,14 +103,17 @@ class GroqAIService:
             data = await self._client.chat_json(system=_ANALYZE_SYSTEM, user=user)
             return _to_analysis(data)
         except Exception:
-            logger.exception("Groq analyze_message failed; using heuristic fallback")
-            return await self._fallback.analyze_message(
+            logger.exception("Groq analyze_post failed; using heuristic fallback")
+            return await self._fallback.analyze_post(
                 text,
                 source_count=source_count,
                 channel_title=channel_title,
             )
 
-    async def answer_search(
+    async def analyze_message(self, text: str, *, source_count: int = 1, channel_title: str | None = None):
+        return await self.analyze_post(text, source_count=source_count, channel_title=channel_title)
+
+    async def answer_question(
         self,
         query: str,
         contexts: Sequence[tuple[int, str, str]],
@@ -99,21 +121,29 @@ class GroqAIService:
         if not contexts:
             return SearchAnswer(
                 answer="По вашему запросу релевантных новостей найдено не было.",
-                used_news_ids=(),
+                used_event_ids=(),
                 relevant=False,
             )
         blocks = []
-        for news_id, title, summary in contexts[:8]:
-            blocks.append(f"[{news_id}] {title}\n{summary}")
-        user = f"Query: {query}\n\nCandidates:\n" + "\n\n".join(blocks)
+        for event_id, title, summary in contexts[:8]:
+            blocks.append(f"[{event_id}] {title}\n{summary}")
+        user = (
+            f"Query: {query}\n\n"
+            "Candidate events (use only these facts; do not invent links between them):\n"
+            + "\n\n".join(blocks)
+            + "\n\nReturn JSON only."
+        )
         try:
             data = await self._client.chat_json(system=_SEARCH_SYSTEM, user=user, temperature=0.1)
             return _to_search_answer(data)
         except Exception:
-            logger.exception("Groq answer_search failed; using heuristic fallback")
-            return await self._fallback.answer_search(query, contexts)
+            logger.exception("Groq answer_question failed; using heuristic fallback")
+            return await self._fallback.answer_question(query, contexts)
 
-    async def translate_news(
+    async def answer_search(self, query: str, contexts: Sequence[tuple[int, str, str]]):
+        return await self.answer_question(query, contexts)
+
+    async def translate(
         self,
         *,
         title: str,
@@ -122,7 +152,7 @@ class GroqAIService:
     ) -> TranslationResult:
         lang = _LANG_NAMES.get(target_lang, target_lang)
         system = (
-            f"Translate the news title and summary into {lang}. "
+            f"Translate the event title and summary into {lang}. "
             "Return JSON: {\"title\": \"...\", \"summary\": \"...\"}. "
             "Keep meaning; do not add facts."
         )
@@ -137,14 +167,19 @@ class GroqAIService:
             logger.exception("Groq translate failed")
             return TranslationResult(title=title, summary=summary)
 
+    async def translate_news(self, *, title: str, summary: str, target_lang: str):
+        return await self.translate(title=title, summary=summary, target_lang=target_lang)
+
+    async def detect_language(self, text: str) -> str:
+        return await self._fallback.detect_language(text)
+
     async def close(self) -> None:
         await self._client.close()
 
 
-def _to_analysis(data: dict[str, Any]) -> NewsAnalysisResult:
+def _to_analysis(data: dict[str, Any]) -> PostAnalysisResult:
     category = str(data.get("category") or "Other").strip()
     if category not in ALLOWED_CATEGORIES:
-        # allow limited custom categories but keep short
         if len(category) > 32 or not category:
             category = "Other"
     try:
@@ -152,25 +187,46 @@ def _to_analysis(data: dict[str, Any]) -> NewsAnalysisResult:
     except (TypeError, ValueError):
         score = 0.0
     score = max(0.0, min(10.0, score))
-    topic = str(data.get("topic") or "").strip()[:128] or None
+    topic = str(data.get("topic") or "").strip()[:512] or None
     why = str(data.get("why_important") or "").strip() or None
+    reasoning = str(data.get("reasoning") or why or "").strip() or None
+    entities = _str_list(data.get("entities"))
+    keywords = _str_list(data.get("keywords")) or entities
     reason = data.get("reason")
-    return NewsAnalysisResult(
-        is_news=bool(data.get("is_news", False)),
+    is_ad = bool(data.get("is_advertisement", False))
+    is_news = bool(data.get("is_news", False)) and not is_ad
+    return PostAnalysisResult(
+        is_news=is_news,
+        is_advertisement=is_ad,
         title=str(data.get("title") or "").strip()[:512] or "Без заголовка",
         summary=str(data.get("summary") or "").strip(),
         category=category,
-        importance_score=round(score, 2),
-        reason=str(reason) if reason else None,
         topic=topic,
+        entities=entities,
+        keywords=keywords,
+        importance_score=round(score, 2),
         why_important=why,
+        reasoning=reasoning,
+        language=str(data.get("language") or "").strip()[:16] or None,
+        reason=str(reason) if reason else ("advertisement" if is_ad else None),
     )
+
+
+def _str_list(raw: Any) -> tuple[str, ...]:
+    if not isinstance(raw, list):
+        return ()
+    out: list[str] = []
+    for x in raw:
+        s = str(x).strip()
+        if s and s not in out:
+            out.append(s[:128])
+    return tuple(out[:20])
 
 
 def _to_search_answer(data: dict[str, Any]) -> SearchAnswer:
     relevant = bool(data.get("relevant", True))
     answer = str(data.get("answer") or "").strip()
-    raw_ids = data.get("used_ids") or data.get("used_news_ids") or []
+    raw_ids = data.get("used_ids") or data.get("used_event_ids") or data.get("used_news_ids") or []
     ids: list[int] = []
     for x in raw_ids:
         try:
@@ -181,7 +237,7 @@ def _to_search_answer(data: dict[str, Any]) -> SearchAnswer:
         return SearchAnswer(
             answer=answer
             or "По вашему запросу релевантных новостей найдено не было.",
-            used_news_ids=(),
+            used_event_ids=(),
             relevant=False,
         )
-    return SearchAnswer(answer=answer, used_news_ids=tuple(ids), relevant=True)
+    return SearchAnswer(answer=answer, used_event_ids=tuple(ids), relevant=True)

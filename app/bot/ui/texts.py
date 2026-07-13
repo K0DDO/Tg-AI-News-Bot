@@ -1,13 +1,16 @@
-"""Briefly UI formatters."""
+"""Briefly UI formatters — work with Brief / Event presentation."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
 from app.bot.i18n import t
-from app.models import News
+from app.models import Event
+from app.services.events.brief import Brief, BriefBuilderService
+from app.utils.relative_dates import resolve_relative_dates
 
 CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩"
+_builder = BriefBuilderService()
 
 
 def escape(text: str) -> str:
@@ -23,6 +26,10 @@ def circled(n: int) -> str:
     if 1 <= n <= 10:
         return CIRCLED[n - 1]
     return f"{n}."
+
+
+def to_brief(event: Event, lang: str) -> Brief:
+    return _builder.build(event, lang=lang)
 
 
 def format_home(lang: str, *, messages: int, news: int, avg_importance: float, last_update: datetime | None) -> str:
@@ -43,96 +50,124 @@ def format_home(lang: str, *, messages: int, news: int, avg_importance: float, l
     )
 
 
-def format_feed(lang: str, items: list[News], *, title_key: str = "feed_title", empty_key: str = "no_more_news") -> str:
+def format_feed(
+    lang: str,
+    items: list[Event] | list[Brief],
+    *,
+    title_key: str = "feed_title",
+    empty_key: str = "no_more_news",
+) -> str:
     if not items:
         return f"🎉 {t(lang, empty_key)}"
+    briefs: list[Brief] = []
+    for item in items:
+        if isinstance(item, Brief):
+            briefs.append(item)
+        else:
+            briefs.append(to_brief(item, lang))
     lines = [f"<b>📰 {t(lang, title_key)}</b>", ""]
-    for i, news in enumerate(items, start=1):
-        sources = news.sources_count or len(news.sources or [])
-        score = float(news.importance_score)
-        cat = escape(news.category or "Other")
-        badge = ""
-        if sources >= 2 and news.updated_at and news.created_at and news.updated_at > news.created_at:
-            badge = f"  📈 {t(lang, 'updated_badge')}"
-        lines.append(f"{circled(i)} <b>{escape(news.localized_title(lang))}</b>{badge}")
-        lines.append(f"⭐ {score:.1f}/10    📂 {cat}    📡 {sources}")
+    for i, brief in enumerate(briefs, start=1):
+        badge = f"  📈 {t(lang, 'updated_badge')}" if brief.updated else ""
+        lines.append(f"{circled(i)} <b>{escape(brief.title)}</b>{badge}")
+        lines.append(f"⭐ {brief.importance_score:.1f}/10    📂 {escape(brief.category)}    📡 {brief.sources_count}")
         lines.append("")
     return "\n".join(lines).rstrip()
 
 
-def format_news_detail(lang: str, news: News, *, index: int, total: int) -> str:
-    sources = news.sources_count or len(news.sources or [])
-    score = float(news.importance_score)
-    cat = escape(news.category or "Other")
-    topic = escape(news.topic) if news.topic else None
+def format_news_detail(lang: str, news: Event | Brief, *, index: int, total: int) -> str:
+    brief = news if isinstance(news, Brief) else to_brief(news, lang)
     lines = [
         f"<b>{index} / {total}</b>",
         "",
-        f"<b>{escape(news.localized_title(lang))}</b>",
+        f"<b>{escape(brief.title)}</b>",
         "",
-        escape(news.localized_summary(lang)),
+        escape(brief.summary),
         "",
-        f"⭐ <b>{score:.1f}/10</b>",
-        f"📂 {cat}",
-        f"📡 {sources}",
+        f"⭐ <b>{brief.importance_score:.1f}/10</b>",
+        f"📂 {escape(brief.category)}",
+        f"📡 {brief.sources_count}",
+        f"📰 {brief.posts_count}",
     ]
-    if topic:
-        lines.append(f"🏷 {topic}")
-    if sources >= 2:
+    if brief.topic:
+        lines.append(f"🏷 {escape(brief.topic)}")
+    if brief.updated:
         lines.append("")
-        lines.append(f"📈 {t(lang, 'updated_badge')}: {sources} {t(lang, 'sources_n')}")
+        lines.append(f"📈 {t(lang, 'updated_badge')}: {brief.sources_count} {t(lang, 'sources_n')}")
     return "\n".join(lines)
 
 
-def format_why(lang: str, news: News) -> str:
-    score = float(news.importance_score)
-    sources = news.sources_count or len(news.sources or [])
-    why = news.why_important or ""
+def format_why(lang: str, news: Event | Brief) -> str:
+    brief = news if isinstance(news, Brief) else to_brief(news, lang)
+    why = brief.why_important or ""
     parts = [p.strip() for p in why.replace("•", ";").split(";") if p.strip()]
     if not parts:
-        parts = [
-            f"{sources} sources" if lang != "ru" else f"{sources} источников",
-        ]
-    lines = [f"⭐ <b>{score:.1f}</b>", "", f"<b>{t(lang, 'why')}</b>", ""]
+        parts = [f"{brief.sources_count} {t(lang, 'sources_n')}"]
+    lines = [f"⭐ <b>{brief.importance_score:.1f}</b>", "", f"<b>{t(lang, 'why')}</b>", ""]
     for p in parts:
         lines.append(f"• {escape(p)}")
     return "\n".join(lines)
 
 
-def format_sources_screen(lang: str, news: News) -> str:
-    lines = [f"📡 <b>{t(lang, 'sources')}</b>", f"<i>{escape(news.localized_title(lang))}</i>", ""]
-    if not news.sources:
+def format_timeline(lang: str, news: Event | Brief) -> str:
+    brief = news if isinstance(news, Brief) else to_brief(news, lang)
+    lines = [f"🕒 <b>{t(lang, 'timeline')}</b>", f"<i>{escape(brief.title)}</i>", ""]
+    if not brief.timeline:
         lines.append("—")
         return "\n".join(lines)
-    for i, src in enumerate(news.sources, start=1):
+    for entry in brief.timeline[-12:]:
+        at = str(entry.get("at") or "")[:16].replace("T", " ")
+        text = escape(str(entry.get("text") or entry.get("kind") or ""))
+        sources = entry.get("sources")
+        lines.append(f"<b>{at}</b>")
+        lines.append(text)
+        if sources is not None:
+            lines.append(f"📡 {sources}")
+        lines.append("────────")
+    return "\n".join(lines).rstrip("─\n")
+
+
+def format_sources_screen(lang: str, news: Event | Brief) -> str:
+    brief = news if isinstance(news, Brief) else to_brief(news, lang)
+    lines = [f"📡 <b>{t(lang, 'sources')}</b>", f"<i>{escape(brief.title)}</i>", ""]
+    if not brief.sources:
+        lines.append("—")
+        return "\n".join(lines)
+    for i, src in enumerate(brief.sources, start=1):
         title = escape(src.channel_title or "Channel")
         uname = f" @{src.channel_username}" if src.channel_username else ""
-        date = src.created_at.strftime("%d.%m.%Y") if src.created_at else ""
+        date = src.published_at.strftime("%d.%m.%Y") if src.published_at else ""
         lines.append(f"{circled(i)} 📰 {title}{uname}")
         if date:
             lines.append(f"   🕒 {date}")
     return "\n".join(lines)
 
 
-def format_search_answer(lang: str, answer: str, news_items: list[News]) -> str:
-    lines = [f"<b>🤖 {t(lang, 'search_answer')}</b>", "", escape(answer), ""]
-    if news_items:
-        lines.append(f"<b>{t(lang, 'sources')}</b>")
+def format_search_answer(lang: str, answer: str, news_items: list[Event]) -> str:
+    if not news_items:
+        empty = (answer or "").strip() or t(lang, "search_empty")
+        return (
+            f"🔍 <b>{t(lang, 'search')}</b>\n\n"
+            f"❌ <b>{t(lang, 'search_not_found')}</b>\n\n"
+            f"{escape(empty)}"
+        )
+    ref = news_items[0].created_at if news_items else None
+    answer_resolved = resolve_relative_dates(answer, ref)
+    lines = [f"<b>🤖 {t(lang, 'search_answer')}</b>", "", escape(answer_resolved), ""]
+    lines.append(f"<b>{t(lang, 'sources')}</b>")
+    lines.append("")
+    for i, event in enumerate(news_items[:5], start=1):
+        brief = to_brief(event, lang)
+        src = brief.sources[0] if brief.sources else None
+        channel = escape(src.channel_title if src else (brief.topic or "—"))
+        date = ""
+        if src and src.published_at:
+            date = src.published_at.strftime("%d.%m.%Y")
+        url = src.url if src else ""
+        lines.append(f"{circled(i)} <b>{escape(brief.title)}</b>")
+        lines.append(f"   📰 {channel}" + (f" · {date}" if date else ""))
+        if url:
+            lines.append(f'   🔗 <a href="{escape(url)}">link</a>')
         lines.append("")
-        for i, news in enumerate(news_items[:5], start=1):
-            src = (news.sources or [None])[0]
-            channel = escape(src.channel_title if src else (news.topic or "—"))
-            date = ""
-            if src and src.created_at:
-                date = src.created_at.strftime("%d.%m.%Y")
-            elif news.created_at:
-                date = news.created_at.strftime("%d.%m.%Y")
-            url = src.source_url if src else ""
-            lines.append(f"{circled(i)} <b>{escape(news.localized_title(lang))}</b>")
-            lines.append(f"   📰 {channel}" + (f" · {date}" if date else ""))
-            if url:
-                lines.append(f'   🔗 <a href="{escape(url)}">link</a>')
-            lines.append("")
     return "\n".join(lines).rstrip()
 
 
@@ -142,15 +177,17 @@ def format_trends(lang: str, rows: list[dict]) -> str:
     lines = [f"<b>🔥 {t(lang, 'trends')}</b>", ""]
     for row in rows:
         growth = row.get("growth_today") or 0
-        lines.append(f"🔥 <b>{escape(row['topic'])}</b>")
+        title = row.get("title") or row.get("topic") or ""
+        lines.append(f"🔥 <b>{escape(title)}</b>")
         lines.append(
             f"📡 {row['sources']} {t(lang, 'sources_n')} · "
-            f"📰 {row['news_count']} {t(lang, 'related_news')}"
+            f"📰 {row.get('posts_count', row.get('news_count', 0))} {t(lang, 'related_news')}"
         )
         if growth:
-            lines.append(f"↑ +{growth} {t(lang, 'today_growth')}")
+            lines.append(f"📈 +{growth} {t(lang, 'today_growth')}")
+        lines.append("────────")
         lines.append("")
-    return "\n".join(lines).rstrip()
+    return "\n".join(lines).rstrip("─ \n")
 
 
 def format_settings(lang: str, settings) -> str:

@@ -28,6 +28,7 @@ class ClusterCandidate:
     title: str
     summary: str
     embedding: Sequence[float] | None = None
+    entities: Sequence[str] | None = None
 
 
 @dataclass(frozen=True, slots=True)

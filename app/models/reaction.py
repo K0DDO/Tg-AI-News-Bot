@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from app.database.base import Base
 
@@ -9,7 +9,7 @@ from app.database.base import Base
 class Reaction(Base):
     __tablename__ = "reactions"
     __table_args__ = (
-        UniqueConstraint("user_id", "news_id", name="uq_reactions_user_id_news_id"),
+        UniqueConstraint("user_id", "event_id", name="uq_reactions_user_id_event_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -18,8 +18,8 @@ class Reaction(Base):
         nullable=False,
         index=True,
     )
-    news_id: Mapped[int] = mapped_column(
-        ForeignKey("news.id", ondelete="CASCADE"),
+    event_id: Mapped[int] = mapped_column(
+        ForeignKey("events.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -31,10 +31,13 @@ class Reaction(Base):
     )
 
     user = relationship("User", back_populates="reactions")
-    news = relationship("News", back_populates="reactions")
+    event = relationship("Event", back_populates="reactions")
+
+    news_id = synonym("event_id")
+    news = synonym("event")
 
     def __repr__(self) -> str:
         return (
             f"<Reaction id={self.id} user_id={self.user_id} "
-            f"news_id={self.news_id} type={self.reaction_type}>"
+            f"event_id={self.event_id} type={self.reaction_type}>"
         )
