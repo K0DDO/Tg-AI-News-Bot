@@ -8,11 +8,11 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.bot.handlers import setup_routers
 from app.bot.middlewares import DbUserMiddleware
 from app.config import get_settings
+from app.logging_setup import setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -22,16 +22,15 @@ async def run_bot() -> None:
     if not settings.bot_token:
         raise RuntimeError("BOT_TOKEN is not configured")
 
-    logging.basicConfig(
-        level=settings.log_level,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    )
+    setup_logging(settings.log_level, logs_dir=settings.logs_dir)
+
+    from app.services.redis_client import create_fsm_storage
 
     bot = Bot(
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    dp = Dispatcher(storage=MemoryStorage())
+    dp = Dispatcher(storage=await create_fsm_storage())
     dp.update.middleware(DbUserMiddleware())
     dp.include_router(setup_routers())
 

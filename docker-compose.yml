@@ -1,74 +1,104 @@
+# Briefly — production stack for Linux VPS (2 GB RAM)
+# Containers: briefly-app, postgres, redis, (optional) watchtower
+# No host network. No published DB/Redis ports. Long polling only.
+
+name: briefly
+
+networks:
+  briefly_net:
+    driver: bridge
+
 services:
   postgres:
     image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-newsbot}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-newsbot}
-      POSTGRES_DB: ${POSTGRES_DB:-newsbot}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-newsbot} -d ${POSTGRES_DB:-newsbot}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  migrate:
-    build: .
+    container_name: briefly-postgres
+    restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-newsbot}:${POSTGRES_PASSWORD:-newsbot}@postgres:5432/${POSTGRES_DB:-newsbot}
+      POSTGRES_USER: ${POSTGRES_USER:-briefly}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-briefly}
+    volumes:
+      - ./postgres:/var/lib/postgresql/data
+    networks:
+      - briefly_net
+    # No host ports — reach only from briefly_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-briefly} -d ${POSTGRES_DB:-briefly}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    mem_limit: 512m
+    shm_size: 128m
+    command:
+      - postgres
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - effective_cache_size=256MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - max_connections=50
+
+  redis:
+    image: redis:7-alpine
+    container_name: briefly-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "48mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - ./redis:/data
+    networks:
+      - briefly_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    mem_limit: 64m
+
+  briefly-app:
+    build: .
+    container_name: briefly-app
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-briefly}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-briefly}
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      TELEGRAM_SESSION_DIR: /app/data/sessions
+      LOGS_DIR: /app/logs
+      EMBEDDING_BACKEND: ${EMBEDDING_BACKEND:-hashing}
+    volumes:
+      - ./data/sessions:/app/data/sessions
+      - ./logs:/app/logs
+      - ./backups:/app/backups
     depends_on:
       postgres:
         condition: service_healthy
-    command: ["alembic", "upgrade", "head"]
-    restart: "no"
+      redis:
+        condition: service_healthy
+    networks:
+      - briefly_net
+    mem_limit: 768m
+    # Nightly Postgres backup inside the app container (pg_dump via network).
+    # Cron-like: a tiny sidecar loop would add another container — use compose health + host cron OR:
+    # scripts/backup_postgres.sh is intended for host crontab / deploy hook.
 
-  api:
-    build: .
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-newsbot}:${POSTGRES_PASSWORD:-newsbot}@postgres:5432/${POSTGRES_DB:-newsbot}
-      POSTGRES_HOST: postgres
-    ports:
-      - "8000:8000"
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    command: ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+  # Optional: auto-update images. Enable with: docker compose --profile ops up -d
+  watchtower:
+    image: containrrr/watchtower:1.7.1
+    container_name: briefly-watchtower
+    profiles: ["ops"]
     restart: unless-stopped
-
-  bot:
-    build: .
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-newsbot}:${POSTGRES_PASSWORD:-newsbot}@postgres:5432/${POSTGRES_DB:-newsbot}
-      POSTGRES_HOST: postgres
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    command: ["python", "-m", "app.bot.main"]
-    restart: unless-stopped
-
-  worker:
-    build: .
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-newsbot}:${POSTGRES_PASSWORD:-newsbot}@postgres:5432/${POSTGRES_DB:-newsbot}
-      POSTGRES_HOST: postgres
-      TELEGRAM_SESSION_DIR: /app/data/sessions
     volumes:
-      - telethon_sessions:/app/data/sessions
-      - hf_cache:/app/data/hf_cache
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    command: ["python", "-m", "app.tasks.worker"]
-    restart: unless-stopped
-
-volumes:
-  pgdata:
-  telethon_sessions:
-  hf_cache:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_POLL_INTERVAL: "86400"
+      WATCHTOWER_INCLUDE_STOPPED: "false"
+    networks:
+      - briefly_net
+    mem_limit: 64m

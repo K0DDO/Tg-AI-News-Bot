@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -129,9 +130,17 @@ async def toggle_cat(callback: CallbackQuery, session: AsyncSession, db_user: Us
     lang = settings.language or "ru"
     await callback.answer()
     if callback.message:
-        await callback.message.edit_reply_markup(
-            reply_markup=categories_keyboard(lang, settings.enabled_categories)
-        )
+        kb = categories_keyboard(lang, settings.enabled_categories)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb)
+        except TelegramBadRequest:
+            try:
+                await callback.message.edit_text(
+                    f"📂 {t(lang, 'set_cats')}",
+                    reply_markup=kb,
+                )
+            except TelegramBadRequest:
+                pass
 
 
 @router.callback_query(F.data == "set:ignore")

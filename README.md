@@ -3,7 +3,10 @@
 Умный новостной сервис для Telegram. Пользователь работает с **событиями (Event)**,
 а не с отдельными Telegram-постами.
 
-## Архитектура (3 уровня)
+Финальный продукт — Telegram-бот. Web UI / мобильное приложение / публичный REST API
+**не развиваются**. Production — Docker Compose на Linux VPS (2 GB RAM) рядом с Amnezia VPN.
+
+## Архитектура данных
 
 ```
 TelegramPost (messages)     — сырой источник
@@ -13,33 +16,60 @@ Event (events)              — каноническое событие + timeli
 Brief (view-model)          — карточка в ленте / поиске / трендах
 ```
 
-Поиск, тренды и рекомендации работают **только по Event Index**.
+## Production (VPS)
 
-## Pipeline
+Структура на сервере:
 
 ```
-TelegramPost
-  → language + rule/ad filter
-  → (create) one AI analyze_post  OR  (merge) no LLM
-  → embedding + EventMerge
-  → Event + timeline + EventSource
-  → Brief on read
+/opt/briefly/
+  docker-compose.yml
+  .env
+  app/
+  scripts/
+  logs/
+  backups/
+  postgres/          # PG data (bind mount)
+  redis/             # Redis data (bind mount)
+  data/sessions/     # Telethon session
 ```
 
-Принцип: **один раз проанализировал — много раз использовал**.
+Контейнеры (своя Docker-сеть, **без host network**, порты БД/Redis **не** публикуются):
 
-## Сервисы
+| Контейнер | Роль |
+|-----------|------|
+| `briefly-app` | Bot (long polling) + Parser + Scheduler + Events + Search + KG |
+| `postgres` | PostgreSQL |
+| `redis` | FSM + краткий кэш |
+| `watchtower` | опционально: `docker compose --profile ops up -d` |
 
-| Сервис | Роль |
-|--------|------|
-| `EventPipeline` | оркестратор |
-| `EventIndexService` | кандидаты поиска/трендов |
-| `SearchService` | строгий поиск по Event |
-| `TrendsService` | топ Event-карточек |
-| `BriefBuilderService` | UX-представление |
-| `AIService` | единственная точка к Groq |
+**Amnezia VPN не трогать:** скрипты не меняют iptables / VPN / чужие порты.
 
-## Быстрый старт
+### Установка
+
+```bash
+# на VPS
+sudo mkdir -p /opt/briefly && sudo chown "$USER":"$USER" /opt/briefly
+cd /opt/briefly
+git clone <repo-url> .
+cp .env.example .env   # заполнить секреты
+./scripts/check_vps.sh
+# Один раз авторизовать Telethon (сессия в data/sessions):
+docker compose run --rm -it briefly-app python scripts/auth_telethon.py
+docker compose up -d --build
+# бэкапы каждую ночь
+crontab -e   # 15 3 * * * cd /opt/briefly && ./scripts/backup_postgres.sh >> logs/backup.log 2>&1
+```
+
+Деплой после `git push`: GitHub Action SSH → `/opt/briefly/scripts/deploy.sh`  
+(секреты: `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`).
+
+Админ-команда в боте: `/status` (нужен `ADMIN_TELEGRAM_IDS` в `.env`).
+
+Логи (ротация): `logs/bot.log`, `parser.log`, `search.log`, `graph.log`, `scheduler.log`, `errors.log`.
+
+Память: держать `EMBEDDING_BACKEND=hashing`. Не включать sentence-transformers на 2 GB.
+
+## Local (Windows / разработка)
 
 ```bash
 copy .env.example .env
@@ -50,7 +80,11 @@ python scripts/auth_telethon.py
 alembic upgrade head
 ```
 
-Процессы: `uvicorn app.api.main:app`, `python -m app.bot.main`, `python -m app.tasks.worker`.
+Процессы (локально):
+
+- `python -m app.runtime` — бот + scheduler в одном процессе
+- или отдельно: `python -m app.bot.main` и `python -m app.tasks.worker`
+- опционально админ-панель: `uvicorn app.api.main:app --port 8000`
 
 ## Тесты
 

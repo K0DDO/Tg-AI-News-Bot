@@ -1,4 +1,4 @@
-# Web / Admin
+# Web / Admin (optional local panel — not started in production compose)
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 jinja2>=3.1.4
@@ -13,6 +13,9 @@ sqlalchemy[asyncio]>=2.0.36
 asyncpg>=0.30.0
 alembic>=1.14.0
 psycopg2-binary>=2.9.10
+
+# Redis (FSM + short-lived cache)
+redis>=5.2.0
 
 # Config / utils
 pydantic>=2.10.0

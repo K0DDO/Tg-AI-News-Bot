@@ -26,10 +26,16 @@ class Settings(BaseSettings):
 
     bot_token: str = Field(default="", description="Telegram Bot API token")
 
+    # Comma-separated Telegram user ids allowed to use /status
+    admin_telegram_ids: str = ""
+
     telegram_api_id: int = 0
     telegram_api_hash: str = ""
     telegram_session_name: str = "news_parser"
     telegram_session_dir: str = "./data/sessions"
+
+    # Redis (FSM + short-lived cache). Empty = memory fallback.
+    redis_url: str = "redis://localhost:6379/0"
 
     admin_username: str = "admin"
     admin_password: str = "change-me"
@@ -55,6 +61,8 @@ class Settings(BaseSettings):
     # If true, /search asks Groq to synthesize an answer over semantic hits
     ai_search_synthesis: bool = True
 
+    logs_dir: str = "./data/logs"
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def async_database_url(self) -> str:
@@ -71,6 +79,14 @@ class Settings(BaseSettings):
         """Sync URL for Alembic migrations."""
         url = self.async_database_url
         return url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+
+    def admin_id_set(self) -> set[int]:
+        out: set[int] = set()
+        for part in (self.admin_telegram_ids or "").split(","):
+            part = part.strip()
+            if part.isdigit():
+                out.add(int(part))
+        return out
 
 
 @lru_cache

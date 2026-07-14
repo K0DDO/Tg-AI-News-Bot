@@ -8,6 +8,7 @@ from decimal import Decimal
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer, selectinload
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.models import Channel, Event, EventSource, Message, User, UserChannel, UserEventState, UserSettings
 from app.services.categories import DEFAULT_CATEGORIES
@@ -40,22 +41,28 @@ class PreferencesService:
 
     @staticmethod
     def _ensure_categories(settings: UserSettings) -> None:
-        """Auto-enable newly added taxonomy categories for existing users."""
+        """Normalize category list without re-enabling user-disabled categories."""
         current = list(settings.enabled_categories or [])
         if not current:
+            # First-time / empty settings → enable full taxonomy once.
             settings.enabled_categories = DEFAULT_CATEGORIES.copy()
             return
-        changed = False
-        for cat in DEFAULT_CATEGORIES:
-            if cat not in current:
-                current.append(cat)
-                changed = True
+        # Drop unknown labels only. Never auto-append missing defaults —
+        # that previously undid every toggle on the next get_or_create().
         cleaned = [c for c in current if c in DEFAULT_CATEGORIES]
-        if cleaned != current:
-            current = cleaned
-            changed = True
-        if changed:
-            settings.enabled_categories = current
+        # Preserve order, dedupe
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for c in cleaned:
+            if c not in seen:
+                seen.add(c)
+                ordered.append(c)
+        if ordered != current:
+            settings.enabled_categories = ordered
+            try:
+                flag_modified(settings, "enabled_categories")
+            except Exception:
+                pass
 
     async def lang(self, user: User) -> str:
         s = await self.get_or_create(user)
@@ -122,13 +129,17 @@ class PreferencesService:
 
     async def toggle_category(self, user: User, category: str) -> UserSettings:
         settings = await self.get_or_create(user)
-        cats = list(settings.enabled_categories or DEFAULT_CATEGORIES.copy())
+        if category not in DEFAULT_CATEGORIES:
+            return settings
+        cats = list(settings.enabled_categories or [])
         if category in cats:
             cats.remove(category)
         else:
             cats.append(category)
         settings.enabled_categories = cats
+        flag_modified(settings, "enabled_categories")
         await self._session.commit()
+        await self._session.refresh(settings)
         return settings
 
     async def set_ignored_topics(self, user: User, text: str) -> UserSettings:
@@ -235,8 +246,9 @@ class FeedService:
             .where(Event.id.in_(allowed))
             .where(Event.id.not_in(blocked))
         )
-        if cats:
-            stmt = stmt.where(or_(Event.category.is_(None), Event.category.in_(cats)))
+        if not cats:
+            return [], 0
+        stmt = stmt.where(func.coalesce(Event.category, "Other").in_(cats))
         for topic in ignored:
             pat = f"%{topic}%"
             stmt = stmt.where(

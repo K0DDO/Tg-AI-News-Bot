@@ -23,6 +23,16 @@ data/
 *.session
 *.session-journal
 
+# Production bind mounts / logs
+logs/**
+backups/**
+postgres/**
+redis/**
+!logs/.gitkeep
+!backups/.gitkeep
+!postgres/.gitkeep
+!redis/.gitkeep
+
 # IDE
 .idea/
 .vscode/
