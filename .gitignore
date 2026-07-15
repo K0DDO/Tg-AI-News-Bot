@@ -49,5 +49,5 @@ redis/**
 sentence-transformers/
 
 # PostgreSQL data (production database)
-postgres/*
+postgres/
 !postgres/.gitkeep
