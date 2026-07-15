@@ -31,7 +31,7 @@ def test_format_home_and_feed():
         id=1,
         title="Test",
         summary="Long summary should not appear in feed",
-        category="AI",
+        category="ai_software",
         importance_score=Decimal("8.1"),
         sources_count=2,
         posts_count=3,
@@ -41,13 +41,13 @@ def test_format_home_and_feed():
     feed = format_feed("ru", [event])
     assert "①" in feed or "1" in feed
     assert "Long summary" not in feed
-    assert "⭐️ 8.1/10 • 📂 AI • 📡 2 • 📰 3" in feed
+    assert "⭐️ 8.1/10 • 📂 🤖 AI &amp; Software • 📡 2 • 📰 3" in feed
     assert circled(1) == "①"
 
 
 def test_meta_line():
-    assert format_meta_line(score=8.0, category="Technology", sources=1, posts=1) == (
-        "⭐️ 8.0/10 • 📂 Technology • 📡 1 • 📰 1"
+    assert format_meta_line(score=8.0, category="technology", sources=1, posts=1) == (
+        "⭐️ 8.0/10 • 📂 💻 Technology • 📡 1 • 📰 1"
     )
 
 

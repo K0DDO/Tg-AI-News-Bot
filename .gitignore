@@ -8,6 +8,11 @@ __pycache__/
 venv/
 env/
 .env
+.env.local
+.env.production
+!.env.example
+!.env.local.example
+!.env.production.example
 *.egg-info/
 dist/
 build/

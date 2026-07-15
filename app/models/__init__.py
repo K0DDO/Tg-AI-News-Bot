@@ -1,3 +1,4 @@
+from app.models.admin import AdminAccount
 from app.models.ai_usage import AiUsageLog
 from app.models.backfill_job import BackfillJob
 from app.models.channel import Channel, UserChannel
@@ -15,6 +16,7 @@ __all__ = [
     "UserEvent",
     "UserEventState",
     "UserNewsState",
+    "AdminAccount",
     "Channel",
     "UserChannel",
     "Message",

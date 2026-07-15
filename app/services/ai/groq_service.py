@@ -12,17 +12,19 @@ from app.services.ai.base import (
 )
 from app.services.ai.groq_client import GroqClient
 from app.services.ai.heuristic import HeuristicAIService
-from app.services.categories import normalize_category
+from app.services.categories import ALLOWED_CATEGORIES, normalize_category
 
 logger = logging.getLogger(__name__)
 
-_ANALYZE_SYSTEM = """You analyze ONE Telegram channel post for Briefly (an event news product).
+_THEME_LIST = ", ".join(ALLOWED_CATEGORIES)
+
+_ANALYZE_SYSTEM = f"""You analyze ONE Telegram channel post for Briefly (an event news product).
 Return ONLY valid JSON with keys:
 is_news (bool),
 is_advertisement (bool),
 title (string, concise headline about THIS post only),
 summary (string, 2-4 sentences about THIS post only),
-category (ONE of: AI, Technology, Hardware, Software, Science, Business, Politics, Entertainment, Sports, Health, Security, Crypto, Gaming, Other),
+category (ONE of: {_THEME_LIST}),
 topic (string: FULL event sentence for THIS post, e.g. "Destin Daniel Cretton снимет фильм по Наруто" — NEVER a single word),
 entities (array of strings: brands/products/people from THIS post only),
 keywords (array of short search keywords from THIS post),
@@ -42,7 +44,7 @@ CRITICAL fidelity rules for title/summary/topic:
 
 is_advertisement=true for promo codes, subscribe CTAs, sales spam.
 is_news=false for ads, chatter, non-news.
-Prefer existing categories. Analyze once — results will be reused.
+Prefer existing theme keys exactly as listed. Analyze once — results will be reused.
 """
 
 _SEARCH_SYSTEM = """You are a careful event news assistant for Briefly.
@@ -90,7 +92,7 @@ class GroqAIService:
                 is_advertisement=False,
                 title="",
                 summary="",
-                category="Other",
+                category="technology",
                 topic=None,
                 reason="empty",
             )

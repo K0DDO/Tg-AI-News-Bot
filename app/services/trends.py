@@ -26,9 +26,11 @@ class TrendsService:
         limit: int = 10,
         channel_ids: list[int] | None = None,
         event_ids: set[int] | None = None,
+        since: datetime | None = None,
     ) -> list[dict]:
         now = datetime.now(timezone.utc)
         day_ago = now - timedelta(hours=24)
+        since_cut = since or day_ago
 
         allowed = event_ids
         if allowed is None and channel_ids is not None:
@@ -43,6 +45,7 @@ class TrendsService:
             .options(selectinload(Event.sources))
             .where(Event.status == "active")
             .where(Event.importance_score >= 3.0)
+            .where(Event.created_at >= since_cut)
             .order_by(Event.sources_count.desc(), Event.updated_at.desc())
             .limit(200)
         )
@@ -128,5 +131,8 @@ class TrendsService:
         limit: int = 10,
         channel_ids: list[int] | None = None,
         event_ids: set[int] | None = None,
+        since: datetime | None = None,
     ) -> list[dict]:
-        return await self.top_events(limit=limit, channel_ids=channel_ids, event_ids=event_ids)
+        return await self.top_events(
+            limit=limit, channel_ids=channel_ids, event_ids=event_ids, since=since
+        )

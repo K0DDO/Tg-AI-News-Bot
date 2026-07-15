@@ -49,17 +49,50 @@ _STRINGS: dict[str, dict[str, str]] = {
         "show_external": "Показать",
         "hist_open": "Открыть",
         "hist_remove": "Убрать",
-        "onb_icons_t": "Легенда иконок",
+        "onb_icons_t": "Как пользоваться",
         "onb_icons_b": (
             "⭐️ — рейтинг важности\n"
-            "📂 — категория\n"
+            "📂 — тема\n"
             "📡 — число источников\n"
             "📰 — число публикаций\n"
             "❤️ — интересно (ваши рекомендации)\n"
             "👎 — не интересно (скрыть)\n"
             "⭐ — сохранить\n"
-            "📖 — подробнее"
+            "📖 — подробнее\n\n"
+            "Лента — непрочитанное по вашим каналам.\n"
+            "Поиск — вопрос обычным языком.\n"
+            "Тренды — самое горячее за сегодня.\n"
+            "Настройки — темы, дайджесты, DND, часовой пояс."
         ),
+        "set_sec_feed": "Лента и доставка",
+        "set_sec_sources": "Источники",
+        "set_sec_lang": "Язык",
+        "set_sec_personal": "Персонализация",
+        "set_sec_info": "Инфо",
+        "set_themes": "Темы",
+        "set_theme_weights": "Веса тем",
+        "set_digests": "Дайджесты",
+        "set_dnd": "Не беспокоить",
+        "set_tz": "Часовой пояс",
+        "how_to_use": "Как пользоваться",
+        "about": "О боте",
+        "about_body": (
+            "Briefly собирает события из ваших Telegram-каналов, "
+            "убирает дубли и показывает важное в удобной ленте."
+        ),
+        "digest_title": "Дайджест",
+        "digest_off": "Выкл",
+        "digest_1h": "Каждый час",
+        "digest_3h": "Каждые 3 ч",
+        "digest_6h": "Каждые 6 ч",
+        "digest_daily": "Раз в день",
+        "bf_today": "Сегодня",
+        "bf_3d": "3 дня",
+        "tz_custom": "Свой timezone",
+        "news_lang_wip": "Язык новостей — в разработке",
+        "digest_pick_time": "Выберите время ежедневной сводки",
+        "tz_custom_hint": "Введите timezone, например Europe/Moscow или Asia/Yekaterinburg",
+        "about_text": "<b>ℹ️ О проекте</b>\n\nBriefly — умная лента новостей из ваших Telegram-каналов: события, темы, поиск и персонализация.",
         "back_home": "Вернуться на главную",
         "details": "Подробнее",
         "next_news": "Следующие",
@@ -185,17 +218,50 @@ _STRINGS: dict[str, dict[str, str]] = {
         "show_external": "Show",
         "hist_open": "Open",
         "hist_remove": "Remove",
-        "onb_icons_t": "Icon legend",
+        "onb_icons_t": "How to use",
         "onb_icons_b": (
             "⭐️ — importance score\n"
-            "📂 — category\n"
+            "📂 — theme\n"
             "📡 — source count\n"
             "📰 — post count\n"
             "❤️ — interesting (your ranking)\n"
             "👎 — not interesting (hide)\n"
             "⭐ — save\n"
-            "📖 — details"
+            "📖 — details\n\n"
+            "Feed — unread from your channels.\n"
+            "Search — ask in plain language.\n"
+            "Trends — hottest today.\n"
+            "Settings — themes, digests, DND, timezone."
         ),
+        "set_sec_feed": "Feed & delivery",
+        "set_sec_sources": "Sources",
+        "set_sec_lang": "Language",
+        "set_sec_personal": "Personalization",
+        "set_sec_info": "Info",
+        "set_themes": "Themes",
+        "set_theme_weights": "Theme weights",
+        "set_digests": "Digests",
+        "set_dnd": "Do not disturb",
+        "set_tz": "Timezone",
+        "how_to_use": "How to use",
+        "about": "About",
+        "about_body": (
+            "Briefly collects events from your Telegram channels, "
+            "deduplicates them, and surfaces what matters."
+        ),
+        "digest_title": "Digest",
+        "digest_off": "Off",
+        "digest_1h": "Every hour",
+        "digest_3h": "Every 3h",
+        "digest_6h": "Every 6h",
+        "digest_daily": "Daily",
+        "bf_today": "Today",
+        "bf_3d": "3 days",
+        "tz_custom": "Custom timezone",
+        "news_lang_wip": "News language — coming soon",
+        "digest_pick_time": "Pick daily digest time",
+        "tz_custom_hint": "Enter a timezone, e.g. Europe/Moscow or Asia/Yekaterinburg",
+        "about_text": "<b>ℹ️ About</b>\n\nBriefly is a smart news feed from your Telegram channels: events, themes, search and personalization.",
         "back_home": "Back home",
         "details": "Details",
         "next_news": "Next",

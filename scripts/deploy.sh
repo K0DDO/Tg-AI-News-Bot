@@ -8,8 +8,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 echo "[deploy] root=$ROOT"
-if [[ ! -f .env ]]; then
-  echo "ERROR: .env missing. Copy .env.example and fill secrets." >&2
+if [[ ! -f .env.production ]]; then
+  echo "ERROR: .env.production missing. Copy .env.production.example and fill secrets." >&2
   exit 1
 fi
 
@@ -20,16 +20,17 @@ if [[ -d .git ]]; then
 fi
 
 echo "[deploy] build + up"
-docker compose build briefly-app
-docker compose up -d postgres redis
-docker compose up -d --force-recreate briefly-app
+export COMPOSE_ENV_FILE=".env.production"
+docker compose --env-file .env.production build briefly-app
+docker compose --env-file .env.production up -d postgres redis
+docker compose --env-file .env.production up -d --force-recreate briefly-app
 
 echo "[deploy] waiting for containers..."
 sleep 5
-docker compose ps
+docker compose --env-file .env.production ps
 
 echo "[deploy] recent app logs"
-docker compose logs --tail=80 briefly-app || true
+docker compose --env-file .env.production logs --tail=80 briefly-app || true
 
 # Optional nightly cron for backups (idempotent hint)
 CRON_LINE="15 3 * * * cd $ROOT && ./scripts/backup_postgres.sh >> $ROOT/logs/backup.log 2>&1"

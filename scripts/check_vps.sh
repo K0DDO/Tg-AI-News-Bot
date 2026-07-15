@@ -55,7 +55,7 @@ echo "NOTE: Do not edit iptables / Amnezia rules for this deploy."
 echo
 echo "--- Recommendations ---"
 echo "1. Install Docker Engine + Compose plugin if missing."
-echo "2. Place project at /opt/briefly with .env (secrets)."
+echo "2. Place project at /opt/briefly with .env.production (secrets)."
 echo "3. Keep EMBEDDING_BACKEND=hashing on 2GB VPS."
 echo "4. Leave ~512MB+ free for Amnezia + OS."
 echo "5. If a port conflict appears, do NOT auto-fix — resolve manually."

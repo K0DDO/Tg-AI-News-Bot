@@ -153,6 +153,7 @@ async def feed_back(callback: CallbackQuery, session: AsyncSession, db_user: Use
 
 @router.callback_query(F.data.startswith("feed:open:"))
 async def feed_open(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    """Подробнее: open event and mark it read immediately."""
     parts = callback.data.split(":")
     offset, index, ids_s = int(parts[2]), int(parts[3]), parts[4] if len(parts) > 4 else ""
     ids = [int(x) for x in ids_s.split(",") if x]
@@ -160,18 +161,74 @@ async def feed_open(callback: CallbackQuery, session: AsyncSession, db_user: Use
     if not ids or not callback.message:
         return
     index = max(0, min(index, len(ids) - 1))
+    await _show_detail(
+        callback.message,
+        session,
+        db_user,
+        offset=offset,
+        index=index,
+        ids=ids,
+        mark_current_read=True,
+        mark_prev_id=None,
+    )
+
+
+@router.callback_query(F.data.startswith("feed:nav:"))
+async def feed_nav(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    """Carousel next/prev: mark leaving event read; show current without marking."""
+    parts = callback.data.split(":")
+    # feed:nav:offset:new_index:from_index:ids
+    offset, index, from_i = int(parts[2]), int(parts[3]), int(parts[4])
+    ids_s = parts[5] if len(parts) > 5 else ""
+    ids = [int(x) for x in ids_s.split(",") if x]
+    await callback.answer()
+    if not ids or not callback.message:
+        return
+    index = max(0, min(index, len(ids) - 1))
+    from_i = max(0, min(from_i, len(ids) - 1))
+    prev_id = ids[from_i] if from_i != index else None
+    await _show_detail(
+        callback.message,
+        session,
+        db_user,
+        offset=offset,
+        index=index,
+        ids=ids,
+        mark_current_read=False,
+        mark_prev_id=prev_id,
+    )
+
+
+async def _show_detail(
+    message: Message,
+    session: AsyncSession,
+    user: User,
+    *,
+    offset: int,
+    index: int,
+    ids: list[int],
+    mark_current_read: bool,
+    mark_prev_id: int | None,
+) -> None:
     prefs = PreferencesService(session)
-    lang = await prefs.lang(db_user)
-    us = await prefs.get_or_create(db_user)
+    lang = await prefs.lang(user)
+    us = await prefs.get_or_create(user)
     news_lang = us.news_language or lang
+    feed = FeedService(session)
+    if mark_prev_id is not None:
+        prev = await _event(session, mark_prev_id)
+        if prev:
+            await feed.mark_read(user, prev)
     news = await _event(session, ids[index])
     if not news:
         return
     await ensure_translation(session, news, news_lang)
-    await FeedService(session).mark_read(db_user, news)
+    if mark_current_read:
+        await feed.mark_read(user, news)
     brief = _briefs.build(news, lang=news_lang, show_summary=us.show_summary)
     related = await _related_events(session, news, limit=4)
-    await callback.message.edit_text(
+    ids_s = ",".join(str(i) for i in ids)
+    await message.edit_text(
         format_news_detail(
             lang,
             brief,
@@ -225,7 +282,7 @@ async def feed_down(callback: CallbackQuery, session: AsyncSession, db_user: Use
     if not n2:
         return
     await ensure_translation(session, n2, news_lang)
-    await FeedService(session).mark_read(db_user, n2)
+    # Do not mark the next card as read — user only disliked the previous one.
     brief = _briefs.build(n2, lang=news_lang, show_summary=us.show_summary)
     await callback.message.edit_text(
         format_news_detail(

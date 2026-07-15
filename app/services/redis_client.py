@@ -58,8 +58,18 @@ async def close_redis() -> None:
 
 
 async def create_fsm_storage() -> BaseStorage:
+    """Use Redis FSM only when Redis actually responds; otherwise MemoryStorage."""
     settings = get_settings()
     if not settings.redis_url:
+        return MemoryStorage()
+    try:
+        from redis.asyncio import Redis
+
+        client = Redis.from_url(settings.redis_url, decode_responses=True)
+        await client.ping()
+        await client.aclose()
+    except Exception:
+        logger.warning("Redis unavailable for FSM; using MemoryStorage")
         return MemoryStorage()
     try:
         from aiogram.fsm.storage.redis import RedisStorage

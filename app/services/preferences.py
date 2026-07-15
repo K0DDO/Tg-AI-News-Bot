@@ -11,7 +11,13 @@ from sqlalchemy.orm import defer, selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.models import Channel, Event, EventSource, Message, User, UserChannel, UserEventState, UserSettings
-from app.services.categories import DEFAULT_CATEGORIES
+from app.services.categories import (
+    DEFAULT_CATEGORIES,
+    THEME_TECHNOLOGY,
+    default_theme_weights,
+    migrate_enabled_list,
+    normalize_category,
+)
 
 LIKE_SCORE_DELTA = Decimal("1.5")
 DISLIKE_SCORE_DELTA = Decimal("-2.0")
@@ -28,12 +34,16 @@ class PreferencesService:
         settings = result.scalar_one_or_none()
         if settings:
             self._ensure_categories(settings)
+            self._ensure_theme_weights(settings)
             return settings
         settings = UserSettings(
             user_id=user.id,
             enabled_categories=DEFAULT_CATEGORIES.copy(),
+            theme_weights=default_theme_weights(),
             language="ru",
             news_language="ru",
+            timezone="Europe/Moscow",
+            digest_mode="1h",
         )
         self._session.add(settings)
         await self._session.flush()
@@ -41,26 +51,44 @@ class PreferencesService:
 
     @staticmethod
     def _ensure_categories(settings: UserSettings) -> None:
-        """Normalize category list without re-enabling user-disabled categories."""
+        """Normalize theme keys; never re-enable user-disabled themes."""
         current = list(settings.enabled_categories or [])
         if not current:
-            # First-time / empty settings → enable full taxonomy once.
             settings.enabled_categories = DEFAULT_CATEGORIES.copy()
             return
-        # Drop unknown labels only. Never auto-append missing defaults —
-        # that previously undid every toggle on the next get_or_create().
-        cleaned = [c for c in current if c in DEFAULT_CATEGORIES]
-        # Preserve order, dedupe
+        migrated = migrate_enabled_list(current)
+        # Only replace if keys changed (legacy rename) — if user had subset, keep subset
+        # migrate_enabled_list maps each item; length may shrink for dupes
+        mapped: list[str] = []
         seen: set[str] = set()
-        ordered: list[str] = []
-        for c in cleaned:
-            if c not in seen:
-                seen.add(c)
-                ordered.append(c)
-        if ordered != current:
-            settings.enabled_categories = ordered
+        for item in current:
+            key = normalize_category(str(item))
+            if key in DEFAULT_CATEGORIES and key not in seen:
+                seen.add(key)
+                mapped.append(key)
+        if not mapped:
+            mapped = list(DEFAULT_CATEGORIES)
+        if mapped != current:
+            settings.enabled_categories = mapped
             try:
                 flag_modified(settings, "enabled_categories")
+            except Exception:
+                pass
+
+    @staticmethod
+    def _ensure_theme_weights(settings: UserSettings) -> None:
+        weights = dict(settings.theme_weights or {})
+        changed = False
+        for key in DEFAULT_CATEGORIES:
+            if key not in weights:
+                weights[key] = 3
+                changed = True
+        # Drop unknowns
+        cleaned = {k: max(1, min(5, int(v))) for k, v in weights.items() if k in DEFAULT_CATEGORIES}
+        if cleaned != settings.theme_weights or changed:
+            settings.theme_weights = cleaned
+            try:
+                flag_modified(settings, "theme_weights")
             except Exception:
                 pass
 
@@ -104,7 +132,77 @@ class PreferencesService:
     async def set_interval(self, user: User, minutes: int) -> UserSettings:
         settings = await self.get_or_create(user)
         settings.update_interval_minutes = minutes
+        # Keep digest_mode in sync for legacy callers
+        if minutes <= 0:
+            settings.digest_mode = "off"
+        elif minutes <= 60:
+            settings.digest_mode = "1h"
+        elif minutes <= 180:
+            settings.digest_mode = "3h"
+        elif minutes <= 360:
+            settings.digest_mode = "6h"
+        else:
+            settings.digest_mode = "daily"
         await self._session.commit()
+        return settings
+
+    async def set_digest_mode(self, user: User, mode: str) -> UserSettings:
+        settings = await self.get_or_create(user)
+        if mode not in {"off", "1h", "3h", "6h", "daily"}:
+            return settings
+        settings.digest_mode = mode
+        settings.notifications_enabled = mode != "off"
+        settings.update_interval_minutes = {"off": 0, "1h": 60, "3h": 180, "6h": 360, "daily": 1440}[mode]
+        await self._session.commit()
+        return settings
+
+    async def set_digest_time(self, user: User, hhmm: str) -> UserSettings:
+        settings = await self.get_or_create(user)
+        settings.digest_time = hhmm.strip()[:5]
+        await self._session.commit()
+        return settings
+
+    async def set_timezone(self, user: User, tz: str) -> UserSettings:
+        settings = await self.get_or_create(user)
+        settings.timezone = tz.strip()[:64] or "Europe/Moscow"
+        await self._session.commit()
+        return settings
+
+    async def set_dnd(
+        self,
+        user: User,
+        *,
+        enabled: bool | None = None,
+        weekday_start: str | None = None,
+        weekday_end: str | None = None,
+        weekend_start: str | None = None,
+        weekend_end: str | None = None,
+    ) -> UserSettings:
+        settings = await self.get_or_create(user)
+        if enabled is not None:
+            settings.dnd_enabled = enabled
+        if weekday_start:
+            settings.dnd_weekday_start = weekday_start
+        if weekday_end:
+            settings.dnd_weekday_end = weekday_end
+        if weekend_start:
+            settings.dnd_weekend_start = weekend_start
+        if weekend_end:
+            settings.dnd_weekend_end = weekend_end
+        await self._session.commit()
+        return settings
+
+    async def set_theme_weight(self, user: User, theme: str, stars: int) -> UserSettings:
+        settings = await self.get_or_create(user)
+        theme = normalize_category(theme)
+        if theme not in DEFAULT_CATEGORIES:
+            return settings
+        weights = dict(settings.theme_weights or default_theme_weights())
+        weights[theme] = max(1, min(5, int(stars)))
+        settings.theme_weights = weights
+        flag_modified(settings, "theme_weights")
+        await self._session.commit()
+        await self._session.refresh(settings)
         return settings
 
     async def set_min_importance(self, user: User, value: float) -> UserSettings:
@@ -190,15 +288,18 @@ class FeedService:
         limit: int | None = None,
         offset: int = 0,
     ) -> tuple[list[Event], int]:
-        """Fast personal feed: SQL filters + small page, no heavy Python scan."""
+        """Fast personal feed: SQL filters + theme weights + unread prune."""
         settings = await self._prefs.get_or_create(user)
         page_size = limit if limit is not None else int(settings.feed_page_size or 5)
         cats = list(settings.enabled_categories or DEFAULT_CATEGORIES)
+        weights = dict(settings.theme_weights or default_theme_weights())
         ignored = [t.strip().lower() for t in (settings.ignored_topics or "").split(",") if t.strip()]
 
         channel_ids = await self._user_channel_ids(user.id)
         if not channel_ids:
             return [], 0
+
+        await self.prune_unread_queue(user)
 
         via_msg = (
             select(EventSource.event_id)
@@ -232,7 +333,7 @@ class FeedService:
         personal = func.coalesce(UserEventState.personal_score, 0)
 
         stmt = (
-            select(Event)
+            select(Event, personal.label("personal"))
             .outerjoin(
                 UserEventState,
                 and_(
@@ -248,7 +349,9 @@ class FeedService:
         )
         if not cats:
             return [], 0
-        stmt = stmt.where(func.coalesce(Event.category, "Other").in_(cats))
+        stmt = stmt.where(
+            func.coalesce(Event.category, THEME_TECHNOLOGY).in_(cats)
+        )
         for topic in ignored:
             pat = f"%{topic}%"
             stmt = stmt.where(
@@ -257,21 +360,79 @@ class FeedService:
                 ~func.lower(func.coalesce(Event.topic, "")).like(pat),
             )
 
-        stmt = (
-            stmt.order_by(
-                (personal + Event.importance_score).desc(),
-                Event.importance_score.desc(),
-                Event.updated_at.desc(),
-            )
-            .offset(max(0, offset))
-            .limit(page_size + 1)
-        )
-        rows = list((await self._session.execute(stmt)).scalars().unique().all())
-        has_more = len(rows) > page_size
-        page = rows[:page_size]
-        # Approximate total for pager: enough to compute has_more correctly.
+        # Fetch a window, then re-rank with theme weights in Python.
+        fetch_n = max(page_size * 4, 40) + offset
+        stmt = stmt.order_by(
+            (personal + Event.importance_score).desc(),
+            Event.importance_score.desc(),
+            Event.updated_at.desc(),
+        ).limit(fetch_n)
+        raw_rows = list((await self._session.execute(stmt)).unique().all())
+
+        def score_row(ev: Event, pers) -> float:
+            w = float(weights.get(normalize_category(ev.category), 3))
+            imp = float(ev.importance_score or 0)
+            p = float(pers or 0)
+            return p + imp * (0.6 + 0.4 * (w / 5.0))
+
+        ranked = sorted(raw_rows, key=lambda r: score_row(r[0], r[1]), reverse=True)
+        events = [r[0] for r in ranked]
+        page = events[offset : offset + page_size]
+        has_more = len(events) > offset + page_size
         total = offset + len(page) + (1 if has_more else 0)
         return page, total
+
+    async def prune_unread_queue(self, user: User) -> int:
+        """Keep at most unread_queue_max unread items; hide weakest without marking read."""
+        from app.config import get_settings
+
+        max_n = int(get_settings().unread_queue_max or 50)
+        settings = await self._prefs.get_or_create(user)
+        cats = list(settings.enabled_categories or DEFAULT_CATEGORIES)
+        channel_ids = await self._user_channel_ids(user.id)
+        if not channel_ids or not cats:
+            return 0
+
+        allowed = await self._event_ids_for_channels(channel_ids)
+        if not allowed:
+            return 0
+        blocked = (
+            await self._session.execute(
+                select(UserEventState.event_id).where(
+                    UserEventState.user_id == user.id,
+                    or_(
+                        UserEventState.is_read.is_(True),
+                        UserEventState.is_hidden.is_(True),
+                        UserEventState.is_disliked.is_(True),
+                    ),
+                )
+            )
+        ).scalars().all()
+        blocked_set = set(blocked)
+        result = await self._session.execute(
+            select(Event)
+            .options(defer(Event.embedding))
+            .where(Event.status == "active")
+            .where(Event.id.in_(list(allowed)))
+            .where(Event.importance_score >= settings.min_importance)
+            .where(func.coalesce(Event.category, THEME_TECHNOLOGY).in_(cats))
+            .order_by(Event.importance_score.asc(), Event.updated_at.asc())
+            .limit(max_n + 80)
+        )
+        candidates = [e for e in result.scalars().all() if e.id not in blocked_set]
+        if len(candidates) <= max_n:
+            return 0
+        # Weakest first already ordered ascending — hide overflow
+        to_hide = candidates[: len(candidates) - max_n]
+        n = 0
+        for ev in to_hide:
+            st = await self._get_or_create_state(user, ev)
+            if not st.is_read and not st.is_favorite:
+                st.is_hidden = True
+                n += 1
+        if n:
+            await self._session.commit()
+        return n
 
     async def event_ids_for_user(self, user: User) -> set[int]:
         channel_ids = await self._user_channel_ids(user.id)

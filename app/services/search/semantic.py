@@ -46,6 +46,13 @@ def parse_period_days(query: str) -> int:
     return intent.period_days or 30
 
 
+def normalize_search_query(query: str) -> str:
+    """ё→е, collapse whitespace — keeps ranking stable across RU variants."""
+    q = (query or "").replace("ё", "е").replace("Ё", "Е")
+    q = re.sub(r"\s+", " ", q).strip()
+    return q
+
+
 def significant_tokens(text: str) -> set[str]:
     tokens = {t.lower() for t in re.findall(r"[\w\-]{2,}", text or "", flags=re.UNICODE)}
     return {t for t in tokens if t not in _STOP and not t.isdigit()}
@@ -127,7 +134,7 @@ class SearchService:
     ) -> list[RankedEvent]:
         from app.services.events.merge import is_near_duplicate
 
-        q = (query or "").strip()
+        q = normalize_search_query(query)
         if not q:
             return []
 
@@ -140,10 +147,15 @@ class SearchService:
         since = datetime.now(timezone.utc) - timedelta(days=days)
 
         channel_ids = None
+        enabled_themes: list[str] | None = None
+        theme_weights: dict[str, int] = {}
         if user is not None and scope in ("auto", "user"):
             from app.services.preferences import FeedService
 
             channel_ids = await FeedService(self._session)._user_channel_ids(user.id) or None
+            us = await self._prefs.get_or_create(user)
+            enabled_themes = list(us.enabled_categories or [])
+            theme_weights = dict(us.theme_weights or {})
         if scope == "global":
             channel_ids = None
 
@@ -241,6 +253,18 @@ class SearchService:
             if deep and eid in seed_set:
                 re.score = min(1.0, re.score + 0.12)
                 re.explanation = [*re.explanation, "уточнено Deep Search"]
+            # ~30% personalization: theme weights + personal_score
+            if user is not None:
+                from app.services.categories import normalize_category
+
+                theme = normalize_category(event.category)
+                w = float(theme_weights.get(theme, 3))
+                theme_factor = max(0.0, min(1.0, w / 5.0))
+                if enabled_themes is not None and enabled_themes and theme not in enabled_themes:
+                    theme_factor *= 0.35
+                pers = float(personal_map.get(eid, 0.0))
+                personalization = 0.55 * theme_factor + 0.45 * pers
+                re.score = min(1.0, 0.70 * re.score + 0.30 * personalization)
             ranked.append(re)
 
         ranked.sort(key=lambda r: r.score, reverse=True)
@@ -329,6 +353,7 @@ class SearchService:
         seed_event_ids: list[int] | None = None,
     ) -> SearchResult:
         empty = empty_message or "По вашему запросу релевантных новостей найдено не было."
+        query = normalize_search_query(query)
         intent = detect_intent(query, deep=deep)
         scope = "global" if include_external or user is None else "user"
         ranked = await self.search_ranked(

@@ -53,6 +53,33 @@ class UserSettings(Base):
     ignored_topics: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
     digest_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     digest_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Product upgrade fields
+    timezone: Mapped[str] = mapped_column(
+        String(64), default="Europe/Moscow", server_default="Europe/Moscow", nullable=False
+    )
+    theme_weights: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    digest_mode: Mapped[str] = mapped_column(
+        String(16), default="1h", server_default="1h", nullable=False
+    )  # off | 1h | 3h | 6h | daily
+    digest_time: Mapped[str] = mapped_column(
+        String(8), default="09:00", server_default="09:00", nullable=False
+    )
+    dnd_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    dnd_weekday_start: Mapped[str] = mapped_column(
+        String(8), default="23:00", server_default="23:00", nullable=False
+    )
+    dnd_weekday_end: Mapped[str] = mapped_column(
+        String(8), default="08:00", server_default="08:00", nullable=False
+    )
+    dnd_weekend_start: Mapped[str] = mapped_column(
+        String(8), default="00:00", server_default="00:00", nullable=False
+    )
+    dnd_weekend_end: Mapped[str] = mapped_column(
+        String(8), default="10:00", server_default="10:00", nullable=False
+    )
+    last_digest_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

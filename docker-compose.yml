@@ -1,6 +1,9 @@
-# Briefly — production stack for Linux VPS (2 GB RAM)
-# Containers: briefly-app, postgres, redis, (optional) watchtower
+# Briefly — production stack for Linux VPS
+# Containers: briefly-app, postgres, redis (+ optional watchtower)
 # No host network. No published DB/Redis ports. Long polling only.
+# Secrets: .env.production (never commit). Amnezia VPN / iptables / other containers: do not touch.
+# Always pass: docker compose --env-file .env.production …
+# (Compose interpolates ${POSTGRES_*} from that file; service env_file injects into containers.)
 
 name: briefly
 
@@ -13,16 +16,16 @@ services:
     image: postgres:16-alpine
     container_name: briefly-postgres
     restart: unless-stopped
-    env_file: .env
+    env_file: .env.production
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-briefly}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production}
       POSTGRES_DB: ${POSTGRES_DB:-briefly}
     volumes:
       - ./postgres:/var/lib/postgresql/data
     networks:
       - briefly_net
-    # No host ports — reach only from briefly_net
+    # Ports intentionally not published — only briefly_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-briefly} -d ${POSTGRES_DB:-briefly}"]
       interval: 10s
@@ -46,7 +49,18 @@ services:
     image: redis:7-alpine
     container_name: briefly-redis
     restart: unless-stopped
-    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "48mb", "--maxmemory-policy", "allkeys-lru"]
+    command:
+      [
+        "redis-server",
+        "--save",
+        "",
+        "--appendonly",
+        "no",
+        "--maxmemory",
+        "48mb",
+        "--maxmemory-policy",
+        "allkeys-lru",
+      ]
     volumes:
       - ./redis:/data
     networks:
@@ -62,12 +76,15 @@ services:
     build: .
     container_name: briefly-app
     restart: unless-stopped
-    env_file: .env
+    env_file: .env.production
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-briefly}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-briefly}
-      REDIS_URL: redis://redis:6379/0
+      APP_ENV: production
+      APP_DEBUG: "false"
+      # Force in-compose networking (ignore any localhost leftovers in the env file)
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-briefly}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-briefly}
+      REDIS_URL: redis://redis:6379/0
       TELEGRAM_SESSION_DIR: /app/data/sessions
       LOGS_DIR: /app/logs
       EMBEDDING_BACKEND: ${EMBEDDING_BACKEND:-hashing}
@@ -83,9 +100,7 @@ services:
     networks:
       - briefly_net
     mem_limit: 768m
-    # Nightly Postgres backup inside the app container (pg_dump via network).
-    # Cron-like: a tiny sidecar loop would add another container — use compose health + host cron OR:
-    # scripts/backup_postgres.sh is intended for host crontab / deploy hook.
+    stop_grace_period: 30s
 
   # Optional: auto-update images. Enable with: docker compose --profile ops up -d
   watchtower:

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from app.bot.i18n import t
 from app.models import Event
+from app.services.categories import normalize_category, theme_display
 from app.services.events.brief import Brief, BriefBuilderService
 from app.utils.relative_dates import resolve_relative_dates
 from app.utils.title_case import normalize_title
@@ -37,7 +38,8 @@ def format_meta_line(
     posts: int,
     first_seen: datetime | None = None,
 ) -> str:
-    line = f"⭐️ {score:.1f}/10 • 📂 {escape(category)} • 📡 {sources} • 📰 {posts}"
+    cat_label = theme_display(normalize_category(category))
+    line = f"⭐️ {score:.1f}/10 • 📂 {escape(cat_label)} • 📡 {sources} • 📰 {posts}"
     if first_seen is not None:
         ts = first_seen
         if ts.tzinfo is None:
@@ -358,30 +360,49 @@ def format_backfill_progress(lang: str, job) -> str:
 
 
 def format_settings(lang: str, settings) -> str:
+    from app.services.categories import theme_display
+
     cats = settings.enabled_categories or []
-    cats_s = ", ".join(cats) if cats else "—"
-    interval = settings.update_interval_minutes
-    if interval < 60:
-        iv = f"{interval}m"
-    elif interval < 1440:
-        iv = f"{interval // 60}h"
+    if cats:
+        cats_s = ", ".join(theme_display(c) for c in cats)
     else:
-        iv = f"{interval // 1440}d"
+        cats_s = "—"
+    mode = settings.digest_mode or "off"
+    digest_label = {
+        "off": t(lang, "digest_off"),
+        "1h": t(lang, "digest_1h"),
+        "3h": t(lang, "digest_3h"),
+        "6h": t(lang, "digest_6h"),
+        "daily": t(lang, "digest_daily"),
+    }.get(mode, mode)
+    if mode == "daily":
+        digest_label = f"{digest_label} ({settings.digest_time})"
     on = t(lang, "on")
     off = t(lang, "off")
-    return (
-        f"<b>⚙ {t(lang, 'settings')}</b>\n\n"
-        f"🌐 {t(lang, 'language')}: <b>{settings.language}</b>\n"
-        f"🗣 {t(lang, 'news_language')}: <b>{settings.news_language}</b>\n"
-        f"📄 {t(lang, 'feed_page_size')}: <b>{settings.feed_page_size}</b>\n"
-        f"🔔 {t(lang, 'notifications')}: <b>{on if settings.notifications_enabled else off}</b>\n"
-        f"🌍 {t(lang, 'include_external')}: <b>{on if settings.include_external_news else off}</b>\n"
-        f"📝 {t(lang, 'show_summary')}: <b>{on if settings.show_summary else off}</b>\n"
-        f"🕒 {iv}\n"
-        f"⭐ {settings.min_importance:.1f}+\n"
-        f"📂 {escape(cats_s)}\n"
-        f"🔕 {escape(settings.ignored_topics or '—')}"
-    )
+    dnd = on if getattr(settings, "dnd_enabled", True) else off
+    lines = [
+        f"<b>⚙ {t(lang, 'settings')}</b>",
+        "",
+        f"{t(lang, 'language')} — <b>{settings.language}</b>",
+        f"{t(lang, 'news_language')} — <b>{settings.news_language}</b>",
+        f"{t(lang, 'feed_page_size')} — <b>{settings.feed_page_size}</b>",
+        f"{t(lang, 'set_digests')} — <b>{digest_label}</b>",
+        f"{t(lang, 'set_dnd')} — <b>{dnd}</b>",
+        f"{t(lang, 'set_tz')} — <b>{escape(settings.timezone or 'Europe/Moscow')}</b>",
+        f"{t(lang, 'set_min')} — <b>{settings.min_importance:.1f}+</b>",
+        f"{t(lang, 'set_themes')} — <b>{escape(cats_s)}</b>",
+        f"{t(lang, 'show_summary')} — <b>{on if settings.show_summary else off}</b>",
+    ]
+    return "\n".join(lines)
+
+
+def format_how_to_use(lang: str) -> str:
+    return f"<b>📖 {t(lang, 'how_to_use')}</b>\n\n{t(lang, 'onb_icons_b')}"
+
+
+def format_about(lang: str) -> str:
+    return f"<b>ℹ️ {t(lang, 'about')}</b>\n\n{t(lang, 'about_body')}"
+
 
 
 def format_privacy(lang: str) -> str:

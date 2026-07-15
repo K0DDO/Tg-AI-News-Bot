@@ -21,6 +21,11 @@ if ($PSScriptRoot) {
 }
 Set-Location -LiteralPath $Root
 
+# Prefer .env.local for Windows development
+if (Test-Path -LiteralPath (Join-Path $Root ".env.local")) {
+    $env:BRIEFLY_ENV_FILE = (Join-Path $Root ".env.local")
+}
+
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $Python)) {
     Write-Host "ERROR: .venv not found:" -ForegroundColor Red
@@ -40,6 +45,7 @@ function Get-BrieflyPython {
             $_.CommandLine -and (
                 $_.CommandLine -match 'app\.bot\.main' -or
                 $_.CommandLine -match 'app\.tasks\.worker' -or
+                $_.CommandLine -match 'app\.runtime' -or
                 $_.CommandLine -match 'uvicorn.*app\.api\.main'
             )
         })

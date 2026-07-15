@@ -15,3 +15,16 @@ class ChannelBulkStates(StatesGroup):
 
 class IgnoreTopicsStates(StatesGroup):
     waiting_topics = State()
+
+
+class AdminAuthStates(StatesGroup):
+    create_password = State()
+    confirm_password = State()
+    enter_password = State()
+    menu = State()
+    find_user = State()
+    appoint_admin = State()
+
+
+class TimezoneStates(StatesGroup):
+    waiting_tz = State()

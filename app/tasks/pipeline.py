@@ -6,6 +6,7 @@ import logging
 
 from app.config import get_settings
 from app.database import get_session_factory
+from app.health import record_error, record_ingest
 from app.models import Channel
 from app.parser import ChannelFetcher, MessageRepository, create_telegram_client
 from app.services.ai import create_ai_service
@@ -71,8 +72,9 @@ async def run_ingest_cycle() -> dict[str, int]:
     await client.connect()
     if not await client.is_user_authorized():
         logger.error("Telethon session is not authorized. Run scripts/auth_telethon.py first.")
+        record_error("Telethon session not authorized")
         await client.disconnect()
-        return {
+        empty = {
             "created_messages": 0,
             "processed": 0,
             "filtered": 0,
@@ -81,6 +83,8 @@ async def run_ingest_cycle() -> dict[str, int]:
             "ads": 0,
             "backfilled": 0,
         }
+        record_ingest(empty)
+        return empty
 
     try:
         async with session_factory() as session:
@@ -210,7 +214,7 @@ async def run_ingest_cycle() -> dict[str, int]:
         if close:
             await close()
 
-    return {
+    out = {
         "created_messages": created_messages,
         "processed": processed,
         "filtered": filtered,
@@ -219,6 +223,8 @@ async def run_ingest_cycle() -> dict[str, int]:
         "ads": ads,
         "backfilled": backfilled,
     }
+    record_ingest(out)
+    return out
 
 
 async def run_cleanup() -> int:

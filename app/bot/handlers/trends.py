@@ -13,6 +13,7 @@ from app.bot.keyboards import add_channels_keyboard
 from app.bot.ui import format_trends
 from app.models import User, UserChannel
 from app.services.preferences import FeedService, PreferencesService
+from app.services.time_prefs import trends_window_start
 from app.services.trends import TrendsService
 
 router = Router(name="trends")
@@ -43,8 +44,11 @@ async def trends_handler(event: Message | CallbackQuery, session: AsyncSession, 
         await event.answer(text, reply_markup=kb)
         return
 
+    prefs = PreferencesService(session)
+    settings = await prefs.get_or_create(db_user)
+    since = trends_window_start(settings)
     event_ids = await FeedService(session).event_ids_for_user(db_user)
-    rows = await TrendsService(session).top_topics(limit=8, event_ids=event_ids)
+    rows = await TrendsService(session).top_topics(limit=8, event_ids=event_ids, since=since)
     text = format_trends(lang, rows)
     if isinstance(event, CallbackQuery):
         await event.answer()

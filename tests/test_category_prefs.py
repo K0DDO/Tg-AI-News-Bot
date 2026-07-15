@@ -2,24 +2,23 @@
 
 from types import SimpleNamespace
 
+from app.services.categories import DEFAULT_CATEGORIES, THEME_AI_SOFTWARE, THEME_TECHNOLOGY
 from app.services.preferences import PreferencesService
 
 
 def test_ensure_categories_does_not_readd_disabled():
-    settings = SimpleNamespace(enabled_categories=["AI", "Software"])
+    settings = SimpleNamespace(enabled_categories=[THEME_AI_SOFTWARE])
     PreferencesService._ensure_categories(settings)
-    assert settings.enabled_categories == ["AI", "Software"]
+    assert settings.enabled_categories == [THEME_AI_SOFTWARE]
 
 
 def test_ensure_categories_empty_gets_defaults():
-    from app.services.categories import DEFAULT_CATEGORIES
-
     settings = SimpleNamespace(enabled_categories=[])
     PreferencesService._ensure_categories(settings)
     assert settings.enabled_categories == DEFAULT_CATEGORIES
 
 
-def test_ensure_categories_drops_unknown():
-    settings = SimpleNamespace(enabled_categories=["AI", "General", "Technology"])
+def test_ensure_categories_migrates_legacy_and_dedupes():
+    settings = SimpleNamespace(enabled_categories=["AI", "Software", "General", "Technology"])
     PreferencesService._ensure_categories(settings)
-    assert settings.enabled_categories == ["AI", "Technology"]
+    assert settings.enabled_categories == [THEME_AI_SOFTWARE, THEME_TECHNOLOGY]

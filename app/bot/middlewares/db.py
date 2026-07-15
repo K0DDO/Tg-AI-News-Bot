@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject
+from aiogram.types import CallbackQuery, Message, TelegramObject
 
 from app.database import get_session_factory
 from app.services.channels import ChannelService
@@ -28,5 +28,12 @@ class DbUserMiddleware(BaseMiddleware):
                 )
                 await session.commit()
                 data["db_user"] = db_user
+                if getattr(db_user, "is_banned", False):
+                    text = "Ваш аккаунт заблокирован администратором."
+                    if isinstance(event, Message):
+                        await event.answer(text)
+                    elif isinstance(event, CallbackQuery):
+                        await event.answer(text, show_alert=True)
+                    return None
             data["session"] = session
             return await handler(event, data)

@@ -44,7 +44,7 @@ def test_groq_json_mapping():
         "is_advertisement": False,
         "title": "NVIDIA представила GPU",
         "summary": "Коротко о релизе.",
-        "category": "Hardware",
+        "category": "technology",
         "topic": "NVIDIA представила новую GPU архитектуру",
         "entities": ["NVIDIA"],
         "keywords": ["GPU"],
@@ -53,7 +53,7 @@ def test_groq_json_mapping():
     }
     result = _to_analysis(raw)
     assert result.is_news is True
-    assert result.category == "Hardware"
+    assert result.category == "technology"
     assert result.importance_score == 8.5
     assert result.entities == ("NVIDIA",)
 
@@ -72,7 +72,7 @@ def test_groq_json_unknown_category():
             "why_important": "market move",
         }
     )
-    assert result.category == "Other"
+    assert result.category == "technology"
     assert result.importance_score == 10.0
     ok = _to_analysis(
         {
@@ -83,7 +83,7 @@ def test_groq_json_unknown_category():
             "importance_score": 5,
         }
     )
-    assert ok.category == "Politics"
+    assert ok.category == "business_finance"
     huge = _to_analysis(
         {
             "is_news": True,
@@ -93,7 +93,7 @@ def test_groq_json_unknown_category():
             "importance_score": 5,
         }
     )
-    assert huge.category == "Other"
+    assert huge.category == "technology"
 
 
 @pytest.mark.asyncio

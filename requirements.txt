@@ -17,6 +17,9 @@ psycopg2-binary>=2.9.10
 # Redis (FSM + short-lived cache)
 redis>=5.2.0
 
+# Admin password hashing
+bcrypt>=4.2.0
+
 # Config / utils
 pydantic>=2.10.0
 pydantic-settings>=2.6.0

@@ -77,12 +77,12 @@ def detail_keyboard(
             [
                 InlineKeyboardButton(
                     text=f"◀️ {t(lang, 'prev')}",
-                    callback_data=f"feed:open:{offset}:{prev_i}:{ids_s}",
+                    callback_data=f"feed:nav:{offset}:{prev_i}:{index}:{ids_s}",
                 ),
                 InlineKeyboardButton(text=f"{index + 1} / {total}", callback_data="noop"),
                 InlineKeyboardButton(
                     text=f"{t(lang, 'next')} ▶️",
-                    callback_data=f"feed:open:{offset}:{next_i}:{ids_s}",
+                    callback_data=f"feed:nav:{offset}:{next_i}:{index}:{ids_s}",
                 ),
             ],
             [
@@ -190,15 +190,14 @@ def backfill_period_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text=t(lang, "bf_1d"), callback_data="set:bf:1"),
+                InlineKeyboardButton(text=t(lang, "bf_today"), callback_data="set:bf:1"),
                 InlineKeyboardButton(text=t(lang, "bf_2d"), callback_data="set:bf:2"),
             ],
             [
+                InlineKeyboardButton(text=t(lang, "bf_3d"), callback_data="set:bf:3"),
                 InlineKeyboardButton(text=t(lang, "bf_7d"), callback_data="set:bf:7"),
-                InlineKeyboardButton(text=t(lang, "bf_14d"), callback_data="set:bf:14"),
             ],
-            [InlineKeyboardButton(text=t(lang, "bf_30d"), callback_data="set:bf:30")],
-            [InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:back")],
+            [InlineKeyboardButton(text=f"⬅️ {t(lang, 'back')}", callback_data="set:feed")],
         ]
     )
 
@@ -221,29 +220,73 @@ def backfill_progress_keyboard(lang: str, job_id: int) -> InlineKeyboardMarkup:
 def settings_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text=f"📂 {t(lang, 'channels')}", callback_data="set:channels"),
-                InlineKeyboardButton(text=f"⭐ {t(lang, 'favorites')}", callback_data="set:favorites"),
-            ],
+            [InlineKeyboardButton(text=f"📰 {t(lang, 'set_sec_feed')}", callback_data="set:feed")],
+            [InlineKeyboardButton(text=f"📡 {t(lang, 'set_sec_sources')}", callback_data="set:sources")],
+            [InlineKeyboardButton(text=f"🌎 {t(lang, 'set_sec_lang')}", callback_data="set:langmenu")],
+            [InlineKeyboardButton(text=f"🎯 {t(lang, 'set_sec_personal')}", callback_data="set:personal")],
             [InlineKeyboardButton(text=f"📚 {t(lang, 'history')}", callback_data="set:history")],
-            [InlineKeyboardButton(text=f"📥 {t(lang, 'load_news')}", callback_data="set:backfill")],
-            [InlineKeyboardButton(text=f"🌐 {t(lang, 'language')}", callback_data="set:lang")],
-            [InlineKeyboardButton(text=f"🗣 {t(lang, 'set_news_lang')}", callback_data="set:newslang")],
+            [InlineKeyboardButton(text=f"ℹ️ {t(lang, 'set_sec_info')}", callback_data="set:info")],
+        ]
+    )
+
+
+def settings_feed_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
             [InlineKeyboardButton(text=f"📄 {t(lang, 'set_page_size')}", callback_data="set:pagesize")],
+            [InlineKeyboardButton(text=f"🔔 {t(lang, 'set_digests')}", callback_data="set:digests")],
+            [InlineKeyboardButton(text=f"🌙 {t(lang, 'set_dnd')}", callback_data="set:dnd")],
+            [InlineKeyboardButton(text=f"🌍 {t(lang, 'set_tz')}", callback_data="set:tz")],
+            [InlineKeyboardButton(text=f"📥 {t(lang, 'load_news')}", callback_data="set:backfill")],
+            [InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:back")],
+        ]
+    )
+
+
+def settings_sources_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"📂 {t(lang, 'channels')}", callback_data="set:channels")],
+            [InlineKeyboardButton(text=f"⭐ {t(lang, 'favorites')}", callback_data="set:favorites")],
+            [InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:back")],
+        ]
+    )
+
+
+def settings_lang_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"🌐 {t(lang, 'language')}", callback_data="set:lang")],
             [
-                InlineKeyboardButton(text=f"🔔 {t(lang, 'notifications')}", callback_data="set:tog:notifications_enabled"),
-                InlineKeyboardButton(text=f"🌍 {t(lang, 'include_external')}", callback_data="set:tog:include_external_news"),
+                InlineKeyboardButton(
+                    text=f"🛠 {t(lang, 'set_news_lang')} 🛠",
+                    callback_data="set:newslang",
+                )
             ],
-            [InlineKeyboardButton(text=f"📝 {t(lang, 'show_summary')}", callback_data="set:tog:show_summary")],
-            [
-                InlineKeyboardButton(text=f"🕒 {t(lang, 'set_interval')}", callback_data="set:interval"),
-                InlineKeyboardButton(text=f"⭐ {t(lang, 'set_min')}", callback_data="set:min"),
-            ],
-            [InlineKeyboardButton(text=f"📂 {t(lang, 'set_cats')}", callback_data="set:cats")],
-            [InlineKeyboardButton(text=f"🔕 {t(lang, 'set_ignore')}", callback_data="set:ignore")],
+            [InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:back")],
+        ]
+    )
+
+
+def settings_personal_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"📂 {t(lang, 'set_themes')}", callback_data="set:cats")],
+            [InlineKeyboardButton(text=f"⭐ {t(lang, 'set_theme_weights')}", callback_data="set:theme_weights")],
+            [InlineKeyboardButton(text=f"⭐ {t(lang, 'set_min')}", callback_data="set:min")],
             [InlineKeyboardButton(text=f"📊 {t(lang, 'set_reset')}", callback_data="set:reset")],
-            [InlineKeyboardButton(text=f"📖 {t(lang, 'tutorial')}", callback_data="onb:0")],
+            [InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:back")],
+        ]
+    )
+
+
+def settings_info_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"📖 {t(lang, 'how_to_use')}", callback_data="onb:0")],
             [InlineKeyboardButton(text=f"🔒 {t(lang, 'privacy')}", callback_data="set:privacy")],
+            [InlineKeyboardButton(text=f"ℹ️ {t(lang, 'about')}", callback_data="set:about")],
+            [InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:back")],
         ]
     )
 
@@ -257,23 +300,80 @@ def page_size_keyboard(lang: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="8", callback_data="set:ps:8"),
                 InlineKeyboardButton(text="10", callback_data="set:ps:10"),
             ],
-            [InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:back")],
+            [InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:feed")],
         ]
     )
 
 
 def interval_keyboard(lang: str) -> InlineKeyboardMarkup:
+    """Digest cadence (renamed from interval)."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=t(lang, "digest_off"), callback_data="set:dm:off")],
+            [
+                InlineKeyboardButton(text=t(lang, "digest_1h"), callback_data="set:dm:1h"),
+                InlineKeyboardButton(text=t(lang, "digest_3h"), callback_data="set:dm:3h"),
+            ],
+            [
+                InlineKeyboardButton(text=t(lang, "digest_6h"), callback_data="set:dm:6h"),
+                InlineKeyboardButton(text=t(lang, "digest_daily"), callback_data="set:dm:daily"),
+            ],
+            [InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:feed")],
+        ]
+    )
+
+
+def digest_time_keyboard(lang: str) -> InlineKeyboardMarkup:
+    times = ["07:00", "08:00", "09:00", "10:00", "12:00", "18:00", "21:00"]
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for tm in times:
+        row.append(InlineKeyboardButton(text=tm, callback_data=f"set:dtime:{tm}"))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:digests")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def dnd_keyboard(lang: str, settings) -> InlineKeyboardMarkup:
+    on = t(lang, "on") if settings.dnd_enabled else t(lang, "off")
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="30m", callback_data="set:iv:30"),
-                InlineKeyboardButton(text="1h", callback_data="set:iv:60"),
-                InlineKeyboardButton(text="6h", callback_data="set:iv:360"),
-                InlineKeyboardButton(text="1d", callback_data="set:iv:1440"),
+                InlineKeyboardButton(
+                    text=f"🌙 {t(lang, 'set_dnd')}: {on}",
+                    callback_data="set:tog:dnd_enabled",
+                )
             ],
-            [InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:back")],
+            [
+                InlineKeyboardButton(
+                    text=f"Будни {settings.dnd_weekday_start}-{settings.dnd_weekday_end}",
+                    callback_data="set:dnd:weekday",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"Выходные {settings.dnd_weekend_start}-{settings.dnd_weekend_end}",
+                    callback_data="set:dnd:weekend",
+                )
+            ],
+            [InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:feed")],
         ]
     )
+
+
+def timezone_keyboard(lang: str) -> InlineKeyboardMarkup:
+    from app.services.time_prefs import POPULAR_TIMEZONES
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for tz in POPULAR_TIMEZONES:
+        rows.append([InlineKeyboardButton(text=tz, callback_data=f"set:tzset:{tz}")])
+    rows.append([InlineKeyboardButton(text=f"✏️ {t(lang, 'tz_custom')}", callback_data="set:tzcustom")])
+    rows.append([InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:feed")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def min_importance_keyboard(lang: str) -> InlineKeyboardMarkup:
@@ -285,26 +385,69 @@ def min_importance_keyboard(lang: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="5+", callback_data="set:mi:5"),
                 InlineKeyboardButton(text="7+", callback_data="set:mi:7"),
             ],
-            [InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:back")],
+            [InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:personal")],
         ]
     )
 
 
 def categories_keyboard(lang: str, enabled: list[str] | None) -> InlineKeyboardMarkup:
-    from app.services.preferences import DEFAULT_CATEGORIES
+    from app.services.categories import DEFAULT_CATEGORIES, THEME_LAYOUT_LONG, THEMES, theme_display
 
-    enabled = enabled or []
-    rows = []
+    enabled_set = set(enabled or [])
+    rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
-    for cat in DEFAULT_CATEGORIES:
-        mark = "✅" if cat in enabled else "⬜️"
-        row.append(InlineKeyboardButton(text=f"{mark} {cat}", callback_data=f"set:cat:{cat}"))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
+    for key in DEFAULT_CATEGORIES:
+        mark = "✓" if key in enabled_set else "□"
+        label = theme_display(key)
+        btn = InlineKeyboardButton(text=f"{mark} {label}", callback_data=f"set:cat:{key}")
+        if key in THEME_LAYOUT_LONG:
+            if row:
+                rows.append(row)
+                row = []
+            rows.append([btn])
+        else:
+            row.append(btn)
+            if len(row) == 2:
+                rows.append(row)
+                row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:back")])
+    rows.append([InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:personal")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def theme_weights_keyboard(lang: str, weights: dict[str, int] | None) -> InlineKeyboardMarkup:
+    from app.services.categories import DEFAULT_CATEGORIES, theme_display
+
+    weights = weights or {}
+    rows: list[list[InlineKeyboardButton]] = []
+    for key in DEFAULT_CATEGORIES:
+        stars = int(weights.get(key, 3))
+        star_txt = "⭐" * stars
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{theme_display(key)} {star_txt}",
+                    callback_data=f"set:tw:{key}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:personal")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def theme_weight_pick_keyboard(lang: str, theme: str) -> InlineKeyboardMarkup:
+    from app.services.categories import theme_display
+
+    rows = [
+        [
+            InlineKeyboardButton(text="⭐" * n, callback_data=f"set:twset:{theme}:{n}")
+            for n in range(1, 6)
+        ]
+    ]
+    rows.append(
+        [InlineKeyboardButton(text=f"🔙 {theme_display(theme)}", callback_data="set:theme_weights")]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
