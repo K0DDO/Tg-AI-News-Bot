@@ -47,3 +47,7 @@ redis/**
 # Models cache
 .cache/
 sentence-transformers/
+
+# PostgreSQL data (production database)
+postgres/*
+!postgres/.gitkeep
