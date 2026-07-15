@@ -1,26 +1,96 @@
-# Simply deploy to VPS on push to main.
-# Secrets: VPS_HOST, VPS_USER, VPS_SSH_KEY (private key), optional VPS_PORT
+# Deploy Briefly — только /opt/briefly на общем VPS
+#
+# Secrets (GitHub → Settings → Secrets → Actions):
+#   VPS_HOST     — IP или hostname VPS
+#   VPS_USER     — deploy
+#   VPS_SSH_KEY  — приватный SSH-ключ (никогда не логировать / не коммитить)
+#
+# Этот workflow НЕ трогает Amnezia VPN, /opt/moex-bot, другие контейнеры,
+# iptables, firewall, docker system prune, volumes чужих проектов.
 
 name: Deploy Briefly
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: deploy-briefly-production
+  cancel-in-progress: false
 
 jobs:
   deploy:
+    name: Deploy to VPS (/opt/briefly)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Deploy over SSH
+      - name: SSH deploy (Briefly only)
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT || 22 }}
+          port: 22
+          command_timeout: 25m
           script_stop: true
+          # Do not pass env secrets into remote shell that could be echoed
           script: |
             set -euo pipefail
+
+            echo "======== [1/9] Identity ========"
+            WHO="$(whoami)"
+            echo "whoami=${WHO}"
+            if [[ "${WHO}" != "deploy" ]]; then
+              echo "ERROR: expected SSH user 'deploy', got '${WHO}'."
+              echo "Configure VPS_USER=deploy and the deploy account (see docs/DEPLOY.md)."
+              exit 1
+            fi
+
+            echo "======== [2/9] Project root ========"
             cd /opt/briefly
-            ./scripts/deploy.sh
+            echo "pwd=$(pwd)"
+            if [[ "$(pwd)" != "/opt/briefly" ]]; then
+              echo "ERROR: must run only in /opt/briefly"
+              exit 1
+            fi
+
+            echo "======== [3/9] Required files ========"
+            missing=0
+            for f in docker-compose.yml Dockerfile .env.production; do
+              if [[ ! -f "$f" ]]; then
+                echo "ERROR: missing $f"
+                missing=1
+              else
+                echo "OK: $f"
+              fi
+            done
+            if [[ "$missing" -ne 0 ]]; then
+              echo "ERROR: abort — project incomplete. Never create .env.production from CI."
+              exit 1
+            fi
+            # Never cat/print .env.production or secrets
+
+            echo "======== [4/9] Update code (keep .env.production) ========"
+            if [[ ! -d .git ]]; then
+              echo "ERROR: /opt/briefly is not a git checkout"
+              exit 1
+            fi
+            # Snapshot env file checksum so we can detect accidental changes
+            ENV_BEFORE="$(sha256sum .env.production | awk '{print $1}')"
+            git fetch origin
+            git checkout main
+            git pull --ff-only origin main
+            ENV_AFTER="$(sha256sum .env.production | awk '{print $1}')"
+            if [[ "$ENV_BEFORE" != "$ENV_AFTER" ]]; then
+              echo "ERROR: .env.production changed during git pull — aborting."
+              exit 1
+            fi
+            echo "OK: code updated; .env.production unchanged"
+
+            echo "======== [5/9] Run server deploy script ========"
+            if [[ ! -x scripts/ci_deploy.sh ]]; then
+              chmod +x scripts/ci_deploy.sh
+            fi
+            # Remainder: compose config, backup, migrate, build app only, health, rollback
+            ./scripts/ci_deploy.sh

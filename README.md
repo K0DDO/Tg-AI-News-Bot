@@ -80,7 +80,8 @@ crontab -e
 # 15 3 * * * cd /opt/briefly && ./scripts/backup_postgres.sh >> logs/backup.log 2>&1
 ```
 
-Деплой: `./scripts/deploy.sh` (ожидает `.env.production`; всегда вызывает compose с `--env-file .env.production`).
+Деплой: GitHub Actions (только `/opt/briefly`) или вручную `./scripts/deploy.sh`.  
+Инструкция по пользователю `deploy`, SSH и Secrets: [docs/DEPLOY.md](docs/DEPLOY.md).
 
 Контейнеры (сеть `briefly_net`, **без** host network, порты PG/Redis **не** наружу):
 

@@ -1,44 +1,32 @@
 #!/usr/bin/env bash
-# Simple deploy on VPS: pull → build → migrate (entrypoint) → up → health check.
-# Usage (on server):  /opt/briefly/scripts/deploy.sh
-# Or via SSH from CI: ssh user@host 'cd /opt/briefly && ./scripts/deploy.sh'
+# Manual deploy on the VPS as user deploy (same path as GitHub Actions).
+# Usage: cd /opt/briefly && ./scripts/deploy.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-echo "[deploy] root=$ROOT"
+if [[ "$(pwd)" != "/opt/briefly" ]]; then
+  echo "WARN: expected /opt/briefly (pwd=$(pwd)). Continue only if intentional." >&2
+fi
+
 if [[ ! -f .env.production ]]; then
-  echo "ERROR: .env.production missing. Copy .env.production.example and fill secrets." >&2
+  echo "ERROR: .env.production missing." >&2
   exit 1
 fi
 
-echo "[deploy] git pull (if repo)"
 if [[ -d .git ]]; then
-  git fetch --all --prune
-  git pull --ff-only
-fi
-
-echo "[deploy] build + up"
-export COMPOSE_ENV_FILE=".env.production"
-docker compose --env-file .env.production build briefly-app
-docker compose --env-file .env.production up -d postgres redis
-docker compose --env-file .env.production up -d --force-recreate briefly-app
-
-echo "[deploy] waiting for containers..."
-sleep 5
-docker compose --env-file .env.production ps
-
-echo "[deploy] recent app logs"
-docker compose --env-file .env.production logs --tail=80 briefly-app || true
-
-# Optional nightly cron for backups (idempotent hint)
-CRON_LINE="15 3 * * * cd $ROOT && ./scripts/backup_postgres.sh >> $ROOT/logs/backup.log 2>&1"
-if command -v crontab >/dev/null; then
-  if ! crontab -l 2>/dev/null | grep -F "backup_postgres.sh" >/dev/null; then
-    echo "[deploy] TIP: add cron:"
-    echo "  $CRON_LINE"
+  echo "[deploy] git fetch + pull main (does not modify .env.production)"
+  ENV_BEFORE="$(sha256sum .env.production | awk '{print $1}')"
+  git fetch origin
+  git checkout main
+  git pull --ff-only origin main
+  ENV_AFTER="$(sha256sum .env.production | awk '{print $1}')"
+  if [[ "$ENV_BEFORE" != "$ENV_AFTER" ]]; then
+    echo "ERROR: .env.production changed during pull" >&2
+    exit 1
   fi
 fi
 
-echo "[deploy] done"
+chmod +x scripts/ci_deploy.sh
+exec ./scripts/ci_deploy.sh

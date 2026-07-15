@@ -1,0 +1,3 @@
+# Keep shell/CI scripts LF for Linux VPS (deploy user / GitHub Actions SSH)
+*.sh text eol=lf
+.github/workflows/*.yml text eol=lf

@@ -24,7 +24,7 @@ COPY app ./app
 COPY scripts ./scripts
 
 RUN mkdir -p /app/data/sessions /app/data/hf_cache /app/logs /app/backups \
-    && chmod +x /app/scripts/entrypoint.sh /app/scripts/backup_postgres.sh /app/scripts/check_vps.sh /app/scripts/deploy.sh \
+    && chmod +x /app/scripts/entrypoint.sh /app/scripts/backup_postgres.sh /app/scripts/check_vps.sh /app/scripts/deploy.sh /app/scripts/ci_deploy.sh \
     && chown -R briefly:briefly /app
 
 USER briefly
