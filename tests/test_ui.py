@@ -18,9 +18,17 @@ def test_parse_channel_refs_mixed():
     @OpenAI
     https://t.me/nvidia
     t.me/s/techcrunch
+    https://telegram.me/reuters
+    telegram.me/s/bbcworld
     junk
     """
-    assert parse_channel_refs(text) == ["openai", "nvidia", "techcrunch"]
+    assert parse_channel_refs(text) == [
+        "openai",
+        "nvidia",
+        "techcrunch",
+        "reuters",
+        "bbcworld",
+    ]
 
 
 def test_format_home_and_feed():

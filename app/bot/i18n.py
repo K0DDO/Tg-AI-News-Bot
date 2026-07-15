@@ -337,7 +337,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "onb_2_t": "Step 2 · Search",
         "onb_2_b": "Ask in plain language — get a short answer and sources.",
         "onb_3_t": "Step 3 · Channels",
-        "onb_3_b": "Add channels in bulk with @username or t.me links.",
+        "onb_3_b": "Add channels in bulk with @username, t.me or telegram.me links.",
         "onb_4_t": "Step 4 · Settings",
         "onb_4_b": "Language, importance, categories — tuned for you.",
         "onb_done_t": "Done",

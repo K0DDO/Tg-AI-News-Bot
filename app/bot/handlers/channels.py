@@ -25,7 +25,7 @@ async def channels_home(message: Message, session: AsyncSession, user: User) -> 
     await message.answer(
         f"<b>📂 {t(lang, 'channels')}</b>\n\n"
         f"{t(lang, 'channels_hint')}\n\n"
-        f"<code>@channel1\n@channel2\nhttps://t.me/channel3</code>",
+        f"<code>@channel1\n@channel2\nhttps://t.me/channel3\nhttps://telegram.me/channel4</code>",
         reply_markup=channels_menu_keyboard(lang),
     )
 
@@ -44,7 +44,7 @@ async def bulk_start(callback: CallbackQuery, state: FSMContext, session: AsyncS
         text = (
             f"<b>➕ {t(lang, 'ch_add')}</b>\n\n"
             f"{t(lang, 'channels_hint')}\n\n"
-            f"<code>@a\n@b\nhttps://t.me/c</code>"
+            f"<code>@a\n@b\nhttps://t.me/c\nhttps://telegram.me/d</code>"
         )
         try:
             await callback.message.edit_text(text)

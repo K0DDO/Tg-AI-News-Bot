@@ -1,11 +1,13 @@
-"""Parse bulk channel usernames / t.me links from user input."""
+"""Parse bulk channel usernames / t.me + telegram.me links from user input."""
 
 from __future__ import annotations
 
 import re
 
+# t.me and telegram.me (both public link forms); optional /s/ preview prefix
 _USER = re.compile(
-    r"(?:https?://)?(?:www\.)?t\.me/(?:s/)?([A-Za-z0-9_]{4,})|@([A-Za-z0-9_]{4,})",
+    r"(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me)/(?:s/)?([A-Za-z0-9_]{4,})"
+    r"|@([A-Za-z0-9_]{4,})",
     re.I,
 )
 _BLOCKED = {"joinchat", "addstickers", "share", "proxy", "socks", "iv"}
