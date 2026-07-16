@@ -69,6 +69,7 @@ class AdminService:
         ).scalar_one_or_none()
 
     async def is_admin_user(self, user: User) -> bool:
+        """True only if an AdminAccount row exists (ENV owner or appointed)."""
         await self.ensure_owner_row(user)
         acc = await self.get_account(user.id)
         return acc is not None
