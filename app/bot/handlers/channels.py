@@ -7,12 +7,13 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.i18n import t
 from app.bot.keyboards import channel_list_keyboard, channels_menu_keyboard
 from app.bot.states import ChannelBulkStates
-from app.models import User
+from app.models import Channel, User, UserChannel
 from app.services.channels import ChannelService
 from app.services.channels.import_parse import parse_channel_refs
 from app.services.preferences import PreferencesService
@@ -60,15 +61,52 @@ async def bulk_import(message: Message, session: AsyncSession, db_user: User, st
     if not refs:
         await message.answer(t(lang, "ch_parse_fail"))
         return
+
     service = ChannelService(session)
-    ok, fail = 0, []
+    added = 0
+    exists = 0
+    errors: list[tuple[str, str]] = []
     added_ids: list[int] = []
+
     for username in refs:
         try:
+            # Already linked?
+            existing_ch = await session.scalar(
+                select(Channel).where(Channel.username == username)
+            )
+            if existing_ch:
+                link = await session.scalar(
+                    select(UserChannel).where(
+                        UserChannel.user_id == db_user.id,
+                        UserChannel.channel_id == existing_ch.id,
+                        UserChannel.is_active.is_(True),
+                    )
+                )
+                if link:
+                    exists += 1
+                    continue
+
             chat = await message.bot.get_chat(f"@{username}")
             if chat.type not in {"channel", "supergroup"}:
-                fail.append(username)
+                errors.append((username, t(lang, "ch_err_not_channel")))
                 continue
+
+            # Re-check by telegram_id
+            by_tid = await session.scalar(
+                select(Channel).where(Channel.telegram_id == chat.id)
+            )
+            if by_tid:
+                link = await session.scalar(
+                    select(UserChannel).where(
+                        UserChannel.user_id == db_user.id,
+                        UserChannel.channel_id == by_tid.id,
+                        UserChannel.is_active.is_(True),
+                    )
+                )
+                if link:
+                    exists += 1
+                    continue
+
             channel = await service.add_channel_for_user(
                 db_user,
                 telegram_id=chat.id,
@@ -78,28 +116,49 @@ async def bulk_import(message: Message, session: AsyncSession, db_user: User, st
                 create_job=False,
             )
             added_ids.append(channel.id)
-            ok += 1
+            added += 1
+        except TelegramBadRequest:
+            errors.append((username, t(lang, "ch_err_unavailable")))
         except Exception:
-            fail.append(username)
+            errors.append((username, t(lang, "ch_err_generic")))
+
     job = None
     if added_ids:
         job = await service.create_backfill_job(db_user.id, days=2, channel_ids=added_ids)
         await session.commit()
         if job:
             await session.refresh(job)
-    summary = f"✅ +{ok}" + (f"\n❌ {', '.join(fail[:10])}" if fail else "")
-    if ok:
-        summary += f"\n\n{t(lang, 'backfill_queued_add')}"
+
+    lines = [
+        f"<b>📡 {t(lang, 'ch_add_result_title')}</b>",
+        "",
+        f"✅ {t(lang, 'ch_added')}: <b>{added}</b>",
+        f"⚠️ {t(lang, 'ch_exists')}: <b>{exists}</b>",
+        f"❌ {t(lang, 'ch_errors')}: <b>{len(errors)}</b>",
+    ]
+    if errors:
+        lines.append("")
+        for uname, reason in errors[:8]:
+            lines.append(f"• @{uname} — {reason}")
+        if len(errors) > 8:
+            lines.append(f"… +{len(errors) - 8}")
+        lines.append("")
+        lines.append(t(lang, "ch_err_hint"))
+    await message.answer("\n".join(lines))
+
     if job:
+        from app.bot.handlers.backfill_watch import start_backfill_watch
         from app.bot.keyboards import backfill_progress_keyboard
         from app.bot.ui import format_backfill_progress
 
-        await message.answer(
+        prog = await message.answer(
             format_backfill_progress(lang, job),
             reply_markup=backfill_progress_keyboard(lang, job.id),
         )
-    else:
-        await message.answer(summary)
+        job.chat_id = prog.chat.id
+        job.message_id = prog.message_id
+        await session.commit()
+        start_backfill_watch(message.bot, job.id, lang)
     await _show_list(message, session, db_user, edit=False)
 
 

@@ -15,7 +15,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.bot.handlers import setup_routers
 from app.bot.middlewares import DbUserMiddleware
 from app.config import get_settings
-from app.health import record_error, record_ingest
+from app.health import record_error, record_ingest, record_admin_log
 from app.logging_setup import setup_logging
 from app.services.digest_dispatch import run_digest_cycle
 from app.services.redis_client import close_redis, create_fsm_storage, ping_redis
@@ -111,6 +111,7 @@ async def run() -> None:
     dp.include_router(setup_routers())
 
     scheduler = await _start_scheduler(settings)
+    record_admin_log("INFO", "Parser/scheduler started")
     stop_event = asyncio.Event()
 
     def _request_stop(sig: signal.Signals) -> None:

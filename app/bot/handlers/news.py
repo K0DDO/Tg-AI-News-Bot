@@ -134,26 +134,43 @@ async def feed_refresh(callback: CallbackQuery, session: AsyncSession, db_user: 
 
 @router.callback_query(F.data.startswith("feed:next:"))
 async def feed_next(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
-    offset = int(callback.data.split(":")[2])
-    prefs = PreferencesService(session)
-    us = await prefs.get_or_create(db_user)
-    limit = int(us.feed_page_size or 5)
-    offset += limit
+    """Дальше: mark entire current block read, show next unread block."""
+    parts = callback.data.split(":")
+    # feed:next:offset:ids   (legacy: feed:next:offset)
+    ids_s = parts[3] if len(parts) > 3 else ""
+    ids = [int(x) for x in ids_s.split(",") if x]
     await callback.answer()
+    if ids:
+        await FeedService(session).mark_read_many(db_user, ids)
     if callback.message:
-        await open_feed(callback.message, session, db_user, offset=offset, edit=True)
+        # Offset 0: read items left the unread queue
+        await open_feed(callback.message, session, db_user, offset=0, edit=True)
+
+
+@router.callback_query(F.data.startswith("feed:done:"))
+async def feed_done(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    """Закончить: mark remaining block read, show empty / done state."""
+    parts = callback.data.split(":")
+    ids_s = parts[3] if len(parts) > 3 else ""
+    ids = [int(x) for x in ids_s.split(",") if x]
+    await callback.answer()
+    if ids:
+        await FeedService(session).mark_read_many(db_user, ids)
+    if callback.message:
+        await open_feed(callback.message, session, db_user, offset=0, edit=True)
 
 
 @router.callback_query(F.data.startswith("feed:back:"))
 async def feed_back(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     await callback.answer()
     if callback.message:
+        # Do not mark unread leftovers — they stay in the queue
         await open_feed(callback.message, session, db_user, offset=0, edit=True)
 
 
 @router.callback_query(F.data.startswith("feed:open:"))
 async def feed_open(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
-    """Подробнее: open event and mark it read immediately."""
+    """Подробнее: open first (or indexed) event and mark it read immediately."""
     parts = callback.data.split(":")
     offset, index, ids_s = int(parts[2]), int(parts[3]), parts[4] if len(parts) > 4 else ""
     ids = [int(x) for x in ids_s.split(",") if x]
@@ -169,24 +186,21 @@ async def feed_open(callback: CallbackQuery, session: AsyncSession, db_user: Use
         index=index,
         ids=ids,
         mark_current_read=True,
-        mark_prev_id=None,
     )
 
 
 @router.callback_query(F.data.startswith("feed:nav:"))
 async def feed_nav(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
-    """Carousel next/prev: mark leaving event read; show current without marking."""
+    """Carousel: the news the user navigates TO becomes read immediately."""
     parts = callback.data.split(":")
     # feed:nav:offset:new_index:from_index:ids
-    offset, index, from_i = int(parts[2]), int(parts[3]), int(parts[4])
+    offset, index = int(parts[2]), int(parts[3])
     ids_s = parts[5] if len(parts) > 5 else ""
     ids = [int(x) for x in ids_s.split(",") if x]
     await callback.answer()
     if not ids or not callback.message:
         return
     index = max(0, min(index, len(ids) - 1))
-    from_i = max(0, min(from_i, len(ids) - 1))
-    prev_id = ids[from_i] if from_i != index else None
     await _show_detail(
         callback.message,
         session,
@@ -194,8 +208,7 @@ async def feed_nav(callback: CallbackQuery, session: AsyncSession, db_user: User
         offset=offset,
         index=index,
         ids=ids,
-        mark_current_read=False,
-        mark_prev_id=prev_id,
+        mark_current_read=True,
     )
 
 
@@ -208,17 +221,12 @@ async def _show_detail(
     index: int,
     ids: list[int],
     mark_current_read: bool,
-    mark_prev_id: int | None,
 ) -> None:
     prefs = PreferencesService(session)
     lang = await prefs.lang(user)
     us = await prefs.get_or_create(user)
     news_lang = us.news_language or lang
     feed = FeedService(session)
-    if mark_prev_id is not None:
-        prev = await _event(session, mark_prev_id)
-        if prev:
-            await feed.mark_read(user, prev)
     news = await _event(session, ids[index])
     if not news:
         return

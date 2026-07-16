@@ -16,6 +16,7 @@ from app.bot.keyboards import (
     categories_keyboard,
     digest_time_keyboard,
     dnd_keyboard,
+    dnd_time_pick_keyboard,
     interval_keyboard,
     language_keyboard,
     min_importance_keyboard,
@@ -205,6 +206,7 @@ async def set_backfill_menu(callback: CallbackQuery, session: AsyncSession, db_u
 
 @router.callback_query(F.data.startswith("set:bf:"))
 async def set_backfill_run(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    from app.bot.handlers.backfill_watch import start_backfill_watch
     from app.services.channels import ChannelService
 
     days = int(callback.data.split(":")[2])
@@ -216,10 +218,23 @@ async def set_backfill_run(callback: CallbackQuery, session: AsyncSession, db_us
         return
     await callback.answer("OK")
     if callback.message:
-        await callback.message.edit_text(
-            format_backfill_progress(lang, job),
-            reply_markup=backfill_progress_keyboard(lang, job.id),
-        )
+        try:
+            await callback.message.edit_text(
+                format_backfill_progress(lang, job),
+                reply_markup=backfill_progress_keyboard(lang, job.id),
+            )
+            job.chat_id = callback.message.chat.id
+            job.message_id = callback.message.message_id
+            await session.commit()
+        except TelegramBadRequest:
+            sent = await callback.message.answer(
+                format_backfill_progress(lang, job),
+                reply_markup=backfill_progress_keyboard(lang, job.id),
+            )
+            job.chat_id = sent.chat.id
+            job.message_id = sent.message_id
+            await session.commit()
+        start_backfill_watch(callback.bot, job.id, lang)
 
 
 @router.callback_query(F.data.startswith("set:bfprog:"))
@@ -425,32 +440,48 @@ async def set_dnd_menu(callback: CallbackQuery, session: AsyncSession, db_user: 
         )
 
 
-@router.callback_query(F.data.in_({"set:dnd:weekday", "set:dnd:weekend"}))
-async def set_dnd_presets(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+@router.callback_query(F.data.startswith("set:dndpick:"))
+async def set_dnd_pick_menu(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    """Open time grid for start/end of weekday or weekend DND."""
+    parts = callback.data.split(":")
+    # set:dndpick:wd|we:start|end
+    kind, which = parts[2], parts[3]
+    lang = await PreferencesService(session).lang(db_user)
+    label = t(lang, "dnd_pick_start") if which == "start" else t(lang, "dnd_pick_end")
+    scope = "Будни" if kind == "wd" else "Выходные"
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(
+            f"🌙 {scope} — {label}",
+            reply_markup=dnd_time_pick_keyboard(lang, kind=kind, which=which),
+        )
+
+
+@router.callback_query(F.data.startswith("set:dndt:"))
+async def set_dnd_time_value(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    parts = callback.data.split(":")
+    # set:dndt:wd|we:start|end:HH:MM  → after split HH and MM are separate
+    kind, which = parts[2], parts[3]
+    hhmm = f"{parts[4]}:{parts[5]}" if len(parts) >= 6 else parts[4]
     prefs = PreferencesService(session)
-    kind = callback.data.split(":")[2]
-    settings = await prefs.get_or_create(db_user)
-    if kind == "weekday":
-        presets = [("23:00", "08:00"), ("22:00", "07:00"), ("00:00", "08:00")]
-        cur = (settings.dnd_weekday_start, settings.dnd_weekday_end)
-        nxt = presets[(presets.index(cur) + 1) % len(presets)] if cur in presets else presets[0]
-        await prefs.set_dnd(db_user, weekday_start=nxt[0], weekday_end=nxt[1])
+    kwargs: dict = {}
+    if kind == "wd" and which == "start":
+        kwargs["weekday_start"] = hhmm
+    elif kind == "wd" and which == "end":
+        kwargs["weekday_end"] = hhmm
+    elif kind == "we" and which == "start":
+        kwargs["weekend_start"] = hhmm
     else:
-        presets = [("00:00", "10:00"), ("00:00", "11:00"), ("01:00", "10:00")]
-        cur = (settings.dnd_weekend_start, settings.dnd_weekend_end)
-        nxt = presets[(presets.index(cur) + 1) % len(presets)] if cur in presets else presets[0]
-        await prefs.set_dnd(db_user, weekend_start=nxt[0], weekend_end=nxt[1])
+        kwargs["weekend_end"] = hhmm
+    await prefs.set_dnd(db_user, **kwargs)
     settings = await prefs.get_or_create(db_user)
     lang = settings.language or "ru"
-    await callback.answer("OK")
+    await callback.answer(hhmm)
     if callback.message:
-        try:
-            await callback.message.edit_reply_markup(reply_markup=dnd_keyboard(lang, settings))
-        except TelegramBadRequest:
-            await callback.message.edit_text(
-                f"🌙 {t(lang, 'set_dnd')}",
-                reply_markup=dnd_keyboard(lang, settings),
-            )
+        await callback.message.edit_text(
+            f"🌙 {t(lang, 'set_dnd')}",
+            reply_markup=dnd_keyboard(lang, settings),
+        )
 
 
 @router.callback_query(F.data == "set:tz")

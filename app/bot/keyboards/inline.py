@@ -55,7 +55,21 @@ def feed_keyboard(lang: str, *, offset: int, page_ids: list[int], has_more: bool
     ]
     if has_more:
         rows.append(
-            [InlineKeyboardButton(text=f"➡ {t(lang, 'next_news')}", callback_data=f"feed:next:{offset}")]
+            [
+                InlineKeyboardButton(
+                    text=f"➡ {t(lang, 'next_news')}",
+                    callback_data=f"feed:next:{offset}:{ids_s}",
+                )
+            ]
+        )
+    else:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"➡ {t(lang, 'finish_block')}",
+                    callback_data=f"feed:done:{offset}:{ids_s}",
+                )
+            ]
         )
     rows.append([InlineKeyboardButton(text=f"📥 {t(lang, 'load_news')}", callback_data="set:backfill")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -106,22 +120,51 @@ def detail_keyboard(
     )
 
 
-def history_keyboard(lang: str, items: list[tuple[int, str]] | None = None) -> InlineKeyboardMarkup:
+def history_keyboard(
+    lang: str,
+    items: list[tuple[int, str]] | None = None,
+    *,
+    days: int = 0,
+    page: int = 0,
+    total_pages: int = 1,
+    query_token: str = "",
+) -> InlineKeyboardMarkup:
+    """items: (event_id, short_title). days=0 means All."""
+    q = query_token or "-"
     rows: list[list[InlineKeyboardButton]] = [
         [
-            InlineKeyboardButton(text=t(lang, "hist_today"), callback_data="hist:d:1"),
-            InlineKeyboardButton(text=t(lang, "hist_week"), callback_data="hist:d:7"),
-            InlineKeyboardButton(text=t(lang, "hist_all"), callback_data="hist:d:0"),
+            InlineKeyboardButton(text=t(lang, "hist_today"), callback_data=f"hist:d:1:0"),
+            InlineKeyboardButton(text=t(lang, "hist_week"), callback_data=f"hist:d:7:0"),
+            InlineKeyboardButton(text=t(lang, "hist_all"), callback_data=f"hist:d:0:0"),
         ],
         [InlineKeyboardButton(text=f"🔍 {t(lang, 'search')}", callback_data="hist:search")],
     ]
-    for event_id, title in (items or [])[:8]:
-        short = (title[:24] + "…") if len(title) > 24 else title
+    for event_id, title in items or []:
+        short = (title[:28] + "…") if len(title) > 28 else title
         rows.append(
             [
-                InlineKeyboardButton(text=f"📖 {short}", callback_data=f"hist:open:{event_id}"),
-                InlineKeyboardButton(text=f"⭐", callback_data=f"hist:fav:{event_id}"),
-                InlineKeyboardButton(text=f"🗑", callback_data=f"hist:del:{event_id}"),
+                InlineKeyboardButton(text=f"📰 {short}", callback_data=f"hist:open:{event_id}"),
+                InlineKeyboardButton(text="⭐", callback_data=f"hist:fav:{event_id}"),
+                InlineKeyboardButton(text="🗑", callback_data=f"hist:del:{event_id}"),
+            ]
+        )
+    if total_pages > 1:
+        prev_p = max(0, page - 1)
+        next_p = min(total_pages - 1, page + 1)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="⬅️",
+                    callback_data=f"hist:d:{days}:{prev_p}:{q}",
+                ),
+                InlineKeyboardButton(
+                    text=f"{page + 1}/{total_pages}",
+                    callback_data="noop",
+                ),
+                InlineKeyboardButton(
+                    text="➡️",
+                    callback_data=f"hist:d:{days}:{next_p}:{q}",
+                ),
             ]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -350,19 +393,52 @@ def dnd_keyboard(lang: str, settings) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text=f"Будни {settings.dnd_weekday_start}-{settings.dnd_weekday_end}",
-                    callback_data="set:dnd:weekday",
+                    text=f"Будни {t(lang, 'dnd_pick_start')}: {settings.dnd_weekday_start}",
+                    callback_data="set:dndpick:wd:start",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text=f"Выходные {settings.dnd_weekend_start}-{settings.dnd_weekend_end}",
-                    callback_data="set:dnd:weekend",
+                    text=f"Будни {t(lang, 'dnd_pick_end')}: {settings.dnd_weekday_end}",
+                    callback_data="set:dndpick:wd:end",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"Вых. {t(lang, 'dnd_pick_start')}: {settings.dnd_weekend_start}",
+                    callback_data="set:dndpick:we:start",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"Вых. {t(lang, 'dnd_pick_end')}: {settings.dnd_weekend_end}",
+                    callback_data="set:dndpick:we:end",
                 )
             ],
             [InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:feed")],
         ]
     )
+
+
+def dnd_time_pick_keyboard(lang: str, *, kind: str, which: str) -> InlineKeyboardMarkup:
+    """kind=wd|we, which=start|end — grid of common times."""
+    times = [
+        "00:00", "01:00", "06:00", "07:00", "08:00", "08:30",
+        "09:00", "10:00", "22:00", "22:30", "23:00", "23:30",
+    ]
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for tm in times:
+        row.append(
+            InlineKeyboardButton(text=tm, callback_data=f"set:dndt:{kind}:{which}:{tm}")
+        )
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:dnd")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def timezone_keyboard(lang: str) -> InlineKeyboardMarkup:

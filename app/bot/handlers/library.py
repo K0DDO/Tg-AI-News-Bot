@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from math import ceil
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -22,6 +23,7 @@ from app.services.translation import ensure_translation
 
 router = Router(name="library")
 _briefs = BriefBuilderService()
+_PAGE = 10
 
 
 async def _render_history(
@@ -29,7 +31,8 @@ async def _render_history(
     session: AsyncSession,
     user: User,
     *,
-    days: int | None = None,
+    days: int = 0,
+    page: int = 0,
     query: str | None = None,
     edit: bool = False,
 ) -> None:
@@ -37,12 +40,25 @@ async def _render_history(
     since = None
     if days and days > 0:
         since = datetime.now(timezone.utc) - timedelta(days=days)
-    rows = await FeedService(session).list_history(user, since=since, query=query)
+    offset = max(0, page) * _PAGE
+    rows, total = await FeedService(session).list_history(
+        user, limit=_PAGE, offset=offset, since=since, query=query
+    )
     for event, _st in rows:
         await ensure_translation(session, event, lang)
-    text = format_history_list(lang, rows)
-    kb_items = [(e.id, e.title) for e, _ in rows[:8]]
-    kb = history_keyboard(lang, kb_items)
+    total_pages = max(1, ceil(total / _PAGE) if total else 1)
+    page = max(0, min(page, total_pages - 1))
+    text = format_history_list(lang, rows, total=total, page=page, page_size=_PAGE)
+    kb_items = [(e.id, e.title or f"#{e.id}") for e, _ in rows]
+    q_token = (query or "").replace(":", " ")[:40] or "-"
+    kb = history_keyboard(
+        lang,
+        kb_items,
+        days=days,
+        page=page,
+        total_pages=total_pages,
+        query_token=q_token,
+    )
     if edit:
         try:
             await target.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
@@ -82,20 +98,28 @@ async def cmd_hist(message: Message, session: AsyncSession, db_user: User) -> No
 
 @router.callback_query(F.data.startswith("hist:d:"))
 async def hist_filter(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
-    days = int(callback.data.split(":")[2])
+    parts = callback.data.split(":")
+    # hist:d:days:page[:query]
+    days = int(parts[2]) if len(parts) > 2 else 0
+    page = int(parts[3]) if len(parts) > 3 else 0
+    query = parts[4] if len(parts) > 4 and parts[4] != "-" else None
     await callback.answer()
     if callback.message:
         await _render_history(
             callback.message,
             session,
             db_user,
-            days=None if days == 0 else days,
+            days=days,
+            page=page,
+            query=query,
             edit=True,
         )
 
 
 @router.callback_query(F.data == "hist:search")
-async def hist_search_ask(callback: CallbackQuery, session: AsyncSession, db_user: User, state: FSMContext) -> None:
+async def hist_search_ask(
+    callback: CallbackQuery, session: AsyncSession, db_user: User, state: FSMContext
+) -> None:
     lang = await PreferencesService(session).lang(db_user)
     await state.set_state(HistoryStates.waiting_query)
     await callback.answer()
@@ -104,7 +128,9 @@ async def hist_search_ask(callback: CallbackQuery, session: AsyncSession, db_use
 
 
 @router.message(HistoryStates.waiting_query)
-async def hist_search_run(message: Message, session: AsyncSession, state: FSMContext, db_user: User) -> None:
+async def hist_search_run(
+    message: Message, session: AsyncSession, state: FSMContext, db_user: User
+) -> None:
     query = (message.text or "").strip()
     await state.clear()
     if not query or query.startswith("/"):
@@ -121,6 +147,8 @@ async def hist_open(callback: CallbackQuery, session: AsyncSession, db_user: Use
     await callback.answer()
     if not news or not callback.message:
         return
+    # Ensure it stays in history (already read)
+    await FeedService(session).mark_read(db_user, news)
     await ensure_translation(session, news, us.news_language or lang)
     brief = _briefs.build(news, lang=us.news_language or lang, show_summary=us.show_summary)
     await callback.message.answer(

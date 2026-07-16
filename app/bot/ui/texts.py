@@ -284,24 +284,27 @@ def format_search_explain(lang: str, explanations: dict[int, list[str]], events:
 def format_history_list(
     lang: str,
     rows: list[tuple[Event, object]],
+    *,
+    total: int = 0,
+    page: int = 0,
+    page_size: int = 10,
 ) -> str:
-    if not rows:
+    if not rows and total <= 0:
         return t(lang, "empty_history")
-    lines = [f"<b>📚 {t(lang, 'history')}</b>", ""]
-    for i, (event, state) in enumerate(rows[:15], start=1):
+    start = page * page_size + 1
+    end = page * page_size + len(rows)
+    lines = [
+        f"<b>📚 {t(lang, 'history')}</b>",
+        f"<i>{start}–{end} {t(lang, 'hist_of')} {total}</i>",
+        "",
+    ]
+    for event, state in rows:
         brief = to_brief(event, lang)
-        read_at = getattr(state, "read_at", None)
-        when = read_at.strftime("%d.%m %H:%M") if read_at else "—"
-        lines.append(f"{circled(i)} <b>{escape(brief.title)}</b>")
-        lines.append(
-            format_meta_line(
-                score=brief.importance_score,
-                category=brief.category,
-                sources=brief.sources_count,
-                posts=brief.posts_count,
-            )
-        )
-        lines.append(f"   🕒 {when}")
+        score = float(brief.importance_score or 0)
+        stars = max(1, min(5, round(score / 2))) if score else 1
+        star_txt = "⭐" * stars
+        lines.append(f"📰 <b>{escape(brief.title)}</b>")
+        lines.append(f"   {star_txt} · {score:.1f}")
         lines.append("")
     return "\n".join(lines).rstrip()
 
@@ -341,6 +344,7 @@ def format_backfill_progress(lang: str, job) -> str:
     total = int(getattr(job, "total", 0) or 0)
     days = int(getattr(job, "days", 0) or 0)
     msgs = int(getattr(job, "messages_fetched", 0) or 0)
+    events_n = int(getattr(job, "events_processed", 0) or 0)
     status = str(getattr(job, "status", "") or "")
     status_key = {
         "queued": "bf_status_queued",
@@ -349,13 +353,35 @@ def format_backfill_progress(lang: str, job) -> str:
         "done": "bf_status_done",
         "failed": "bf_status_failed",
     }.get(status, "bf_status_queued")
+
+    if status == "done":
+        created = getattr(job, "created_at", None)
+        updated = getattr(job, "updated_at", None)
+        elapsed = ""
+        if created and updated:
+            try:
+                secs = int((updated - created).total_seconds())
+                m, s = divmod(max(0, secs), 60)
+                elapsed = f"\n⏱ {t(lang, 'bf_time')}: <b>{m}:{s:02d}</b>"
+            except Exception:
+                elapsed = ""
+        return (
+            f"<b>✅ {t(lang, 'bf_done_title')}</b>\n\n"
+            f"{t(lang, 'bf_added')}:\n"
+            f"📰 {t(lang, 'bf_news_label')}: <b>{msgs}</b>\n"
+            f"🔥 Events: <b>{events_n}</b>"
+            f"{elapsed}"
+        )
+
+    waiting = t(lang, "bf_waiting") if status in {"queued", "running", "analyzing"} else ""
     return (
-        f"<b>📥 {t(lang, 'load_news')}</b>\n\n"
-        f"{t(lang, 'bf_period', days=days)}\n"
-        f"<code>{_progress_bar(pct)}</code> <b>{pct}%</b>\n"
-        f"{t(lang, 'bf_channels', done=done, total=total)}\n"
-        f"{t(lang, 'bf_messages', n=msgs)}\n"
-        f"{t(lang, 'bf_status')}: <b>{t(lang, status_key)}</b>"
+        f"<b>📰 {t(lang, 'bf_loading_title')}</b>\n\n"
+        f"<code>{_progress_bar(pct)}</code> <b>{pct}%</b>\n\n"
+        f"📡 {t(lang, 'bf_channels', done=done, total=total)}\n"
+        f"📝 {t(lang, 'bf_posts_label')}: <b>{msgs}</b>\n"
+        f"🧠 {t(lang, 'bf_analysis_label')}: <b>{events_n}</b>\n"
+        f"{t(lang, 'bf_status')}: <b>{t(lang, status_key)}</b>\n"
+        f"{waiting}"
     )
 
 

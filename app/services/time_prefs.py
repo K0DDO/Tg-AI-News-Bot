@@ -53,7 +53,7 @@ def _in_dnd_window(local_dt: datetime, start: time, end: time) -> bool:
     t = local_dt.time().replace(second=0, microsecond=0)
     if start <= end:
         return start <= t < end
-    # Overnight window (e.g. 23:00–08:00)
+    # Overnight window (e.g. 23:00–08:30)
     return t >= start or t < end
 
 
@@ -81,6 +81,27 @@ def dnd_end_local(settings: UserSettings) -> datetime:
     if candidate <= local:
         candidate += timedelta(days=1)
     return candidate
+
+
+def last_dnd_end_utc(settings: UserSettings, *, now_utc: datetime | None = None) -> datetime:
+    """Most recent DND end moment in UTC (today's end if already past, else yesterday's)."""
+    now_utc = now_utc or datetime.now(timezone.utc)
+    local = now_utc.astimezone(zone_for(settings))
+    # Use the schedule for the day when DND *ended* (morning of local day)
+    if is_weekend(local):
+        end = parse_hhmm(settings.dnd_weekend_end, "10:00")
+    else:
+        end = parse_hhmm(settings.dnd_weekday_end, "08:00")
+    candidate = local.replace(hour=end.hour, minute=end.minute, second=0, microsecond=0)
+    if candidate > local:
+        candidate -= timedelta(days=1)
+        # After going back a day, weekend flag may flip — re-read end for that day
+        if is_weekend(candidate):
+            end = parse_hhmm(settings.dnd_weekend_end, "10:00")
+        else:
+            end = parse_hhmm(settings.dnd_weekday_end, "08:00")
+        candidate = candidate.replace(hour=end.hour, minute=end.minute, second=0, microsecond=0)
+    return candidate.astimezone(timezone.utc)
 
 
 def trends_window_start(settings: UserSettings | None) -> datetime:
@@ -113,19 +134,23 @@ def is_digest_due(settings: UserSettings, *, now_utc: datetime | None = None) ->
     now_utc = now_utc or datetime.now(timezone.utc)
     last = settings.last_digest_sent_at
     local = now_utc.astimezone(zone_for(settings))
+    dnd_end = last_dnd_end_utc(settings, now_utc=now_utc)
 
     hours = digest_interval_hours(mode)
     if hours is not None:
-        if last is None:
-            return True
-        # After DND: first send at dnd_end + interval (approx: if last before DND end, wait)
-        if (now_utc - last) >= timedelta(hours=hours):
-            return True
-        return False
+        # After quiet hours: first digest at DND end if nothing sent since then
+        if last is None or last < dnd_end:
+            return now_utc >= dnd_end
+        return (now_utc - last) >= timedelta(hours=hours)
 
     if mode == "daily":
         target = parse_hhmm(settings.digest_time, "09:00")
-        if local.time() < target:
+        # Prefer DND end as first morning delivery when digest_time is before/at end
+        morning = max(
+            local.replace(hour=target.hour, minute=target.minute, second=0, microsecond=0),
+            dnd_end.astimezone(zone_for(settings)),
+        )
+        if local < morning:
             return False
         if last is None:
             return True

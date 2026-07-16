@@ -528,6 +528,34 @@ class FeedService:
         state.sources_at_interaction = event.sources_count or len(event.sources or [])
         await self._session.commit()
 
+    async def mark_read_many(self, user: User, event_ids: list[int]) -> int:
+        """Mark a feed block as read (e.g. user pressed Дальше / Закончить)."""
+        if not event_ids:
+            return 0
+        from app.services.digest import NewsService
+
+        news_svc = NewsService(self._session)
+        n = 0
+        now = datetime.now(timezone.utc)
+        for eid in event_ids:
+            event = await news_svc.get_event(eid)
+            if not event:
+                continue
+            state = await self._get_or_create_state(user, event)
+            if state.is_read:
+                continue
+            state.is_read = True
+            state.is_shown = True
+            state.read_at = now
+            state.opened_at = state.opened_at or now
+            state.shown_count = max(int(state.shown_count or 0), 1)
+            state.score_at_interaction = event.importance_score
+            state.sources_at_interaction = event.sources_count or len(event.sources or [])
+            n += 1
+        if n:
+            await self._session.commit()
+        return n
+
     async def mark_liked(self, user: User, event: Event) -> None:
         state = await self._get_or_create_state(user, event)
         if not state.is_liked:
@@ -572,19 +600,21 @@ class FeedService:
         self,
         user: User,
         *,
-        limit: int = 30,
+        limit: int = 10,
+        offset: int = 0,
         since: datetime | None = None,
         query: str | None = None,
-    ) -> list[tuple[Event, UserEventState]]:
+    ) -> tuple[list[tuple[Event, UserEventState]], int]:
+        """Return (page rows, total matching count). Only is_read items (= history)."""
         stmt = (
             select(Event, UserEventState)
             .join(UserEventState, UserEventState.event_id == Event.id)
-            .options(selectinload(Event.sources))
+            .options(selectinload(Event.sources), defer(Event.embedding))
             .where(UserEventState.user_id == user.id, UserEventState.is_read.is_(True))
         )
         if since is not None:
             stmt = stmt.where(UserEventState.read_at >= since)
-        stmt = stmt.order_by(UserEventState.read_at.desc().nulls_last()).limit(limit * 3 if query else limit)
+        stmt = stmt.order_by(UserEventState.read_at.desc().nulls_last())
         result = await self._session.execute(stmt)
         rows = list(result.all())
         q = (query or "").strip().lower()
@@ -596,4 +626,5 @@ class FeedService:
                 or q in (n.summary or "").lower()
                 or q in (n.topic or "").lower()
             ]
-        return rows[:limit]
+        total = len(rows)
+        return rows[offset : offset + limit], total

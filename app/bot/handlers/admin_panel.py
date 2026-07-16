@@ -1,8 +1,9 @@
-"""Telegram admin panel (/admin) — password-gated menu."""
+"""Telegram admin panel (/admin) — compact: Stats / Logs / Diagnostics."""
 
 from __future__ import annotations
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
@@ -10,37 +11,46 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.keyboards.reply import main_menu
 from app.bot.states import AdminAuthStates
+from app.config import get_settings
+from app.health import admin_logs, diagnostics_snapshot, last_ingest, record_admin_log
 from app.models import User
 from app.services.admin_service import AdminService, verify_password
 from app.services.preferences import PreferencesService
+from app.services.redis_client import ping_redis
 
 router = Router(name="admin_panel")
 
 BTN_STATS = "📊 Статистика"
-BTN_USERS = "👥 Пользователи"
-BTN_NEWS = "📰 Новости"
-BTN_CHANNELS = "📡 Каналы"
-BTN_AI = "🤖 AI/Graph"
-BTN_ADMINS = "🛡 Администраторы"
+BTN_LOGS = "📜 Логи"
+BTN_DIAG = "🧪 Диагностика"
 BTN_EXIT = "🚪 Выйти"
-BTN_BACK = "🔙 Назад"
 
 
-def admin_menu_keyboard(*, is_owner: bool) -> ReplyKeyboardMarkup:
-    rows = [
-        [KeyboardButton(text=BTN_STATS), KeyboardButton(text=BTN_USERS)],
-        [KeyboardButton(text=BTN_NEWS), KeyboardButton(text=BTN_CHANNELS)],
-        [KeyboardButton(text=BTN_AI)],
-    ]
-    if is_owner:
-        rows.append([KeyboardButton(text=BTN_ADMINS)])
-    rows.append([KeyboardButton(text=BTN_EXIT)])
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+def admin_menu_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_STATS)],
+            [KeyboardButton(text=BTN_LOGS), KeyboardButton(text=BTN_DIAG)],
+            [KeyboardButton(text=BTN_EXIT)],
+        ],
+        resize_keyboard=True,
+    )
 
 
 async def _require_session(state: FSMContext) -> bool:
     data = await state.get_data()
     return bool(data.get("admin_ok"))
+
+
+async def _safe_delete(message: Message | None) -> None:
+    if message is None:
+        return
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+    except Exception:
+        pass
 
 
 @router.message(Command("admin"))
@@ -60,21 +70,29 @@ async def cmd_admin(
         return
 
     await state.clear()
+    await _safe_delete(message)
+
     if acc.must_set_password or not acc.password_hash:
         await state.set_state(AdminAuthStates.create_password)
-        await message.answer(
+        prompt = await message.answer(
             "Создайте пароль для админ-панели (минимум 6 символов):",
             reply_markup=ReplyKeyboardRemove(),
         )
+        await state.update_data(prompt_id=prompt.message_id)
         return
 
     await state.set_state(AdminAuthStates.enter_password)
-    await message.answer("Введите пароль админ-панели:", reply_markup=ReplyKeyboardRemove())
+    prompt = await message.answer(
+        "Введите пароль админ-панели:",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await state.update_data(prompt_id=prompt.message_id)
 
 
 @router.message(AdminAuthStates.create_password)
 async def admin_create_password(message: Message, state: FSMContext) -> None:
     pwd = (message.text or "").strip()
+    await _safe_delete(message)
     if len(pwd) < 6:
         await message.answer("Пароль слишком короткий. Минимум 6 символов:")
         return
@@ -92,16 +110,19 @@ async def admin_confirm_password(
 ) -> None:
     data = await state.get_data()
     pwd = data.get("new_password") or ""
+    await _safe_delete(message)
     if (message.text or "").strip() != pwd:
         await state.set_state(AdminAuthStates.create_password)
         await message.answer("Пароли не совпали. Введите новый пароль:")
         return
     svc = AdminService(session)
     await svc.set_password(db_user, pwd)
-    is_owner = await svc.is_owner(db_user)
     await state.set_state(AdminAuthStates.menu)
-    await state.update_data(admin_ok=True, is_owner=is_owner)
-    await message.answer("Пароль сохранён. Админ-меню:", reply_markup=admin_menu_keyboard(is_owner=is_owner))
+    await state.update_data(admin_ok=True)
+    ok = await message.answer("🛠 Админ-меню:", reply_markup=admin_menu_keyboard())
+    # Delete ephemeral "password saved" quickly by editing? Keep menu.
+    record_admin_log("INFO", f"Admin login uid={db_user.id}")
+    _ = ok
 
 
 @router.message(AdminAuthStates.enter_password)
@@ -113,13 +134,24 @@ async def admin_enter_password(
 ) -> None:
     svc = AdminService(session)
     acc = await svc.get_account(db_user.id)
-    if not acc or not verify_password(message.text or "", acc.password_hash):
+    data = await state.get_data()
+    prompt_id = data.get("prompt_id")
+    pwd_ok = acc and verify_password(message.text or "", acc.password_hash)
+    await _safe_delete(message)
+    if prompt_id and message.chat:
+        try:
+            await message.bot.delete_message(message.chat.id, int(prompt_id))
+        except Exception:
+            pass
+    if not pwd_ok:
         await message.answer("Неверный пароль. Попробуйте ещё раз или /admin")
         return
-    is_owner = await svc.is_owner(db_user)
     await state.set_state(AdminAuthStates.menu)
-    await state.update_data(admin_ok=True, is_owner=is_owner)
-    await message.answer("Админ-меню:", reply_markup=admin_menu_keyboard(is_owner=is_owner))
+    await state.update_data(admin_ok=True)
+    accepted = await message.answer("Пароль принят.")
+    await _safe_delete(accepted)
+    await message.answer("🛠 Админ-меню:", reply_markup=admin_menu_keyboard())
+    record_admin_log("INFO", f"Admin login uid={db_user.id}")
 
 
 @router.message(AdminAuthStates.menu, F.text == BTN_EXIT)
@@ -141,245 +173,70 @@ async def admin_stats(message: Message, session: AsyncSession, state: FSMContext
     stats = await AdminService(session).admin_statistics()
     text = (
         "<b>📊 Статистика</b>\n\n"
-        f"👥 Пользователи: <b>{stats['users_total']}</b> "
-        f"(активных за сутки: {stats['users_active_today']})\n"
-        f"📡 Каналы: <b>{stats['channels']}</b>\n"
-        f"📰 Посты: <b>{stats['posts']}</b>\n"
-        f"⚡️ События: <b>{stats['events']}</b>\n"
-        f"🕸 Nodes / Edges: <b>{stats['nodes']}</b> / <b>{stats['edges']}</b>\n"
-        f"🤖 AI запросов: <b>{stats['ai_requests']}</b>\n"
-        f"🪙 Tokens in/out/Σ: {stats['tokens_in']} / {stats['tokens_out']} / {stats['tokens_total']}"
-    )
-    await message.answer(text)
-
-
-@router.message(AdminAuthStates.menu, F.text == BTN_USERS)
-async def admin_users_prompt(message: Message, state: FSMContext) -> None:
-    if not await _require_session(state):
-        return
-    await state.set_state(AdminAuthStates.find_user)
-    await message.answer(
-        "Пришлите @username, telegram_id или id пользователя.\n"
-        "Или «list» для последних 20.",
-        reply_markup=ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text=BTN_BACK)]],
-            resize_keyboard=True,
-        ),
-    )
-
-
-@router.message(AdminAuthStates.find_user, F.text == BTN_BACK)
-async def admin_users_back(
-    message: Message,
-    session: AsyncSession,
-    db_user: User,
-    state: FSMContext,
-) -> None:
-    is_owner = await AdminService(session).is_owner(db_user)
-    await state.set_state(AdminAuthStates.menu)
-    await state.update_data(admin_ok=True, is_owner=is_owner)
-    await message.answer("Админ-меню:", reply_markup=admin_menu_keyboard(is_owner=is_owner))
-
-
-@router.message(
-    StateFilter(AdminAuthStates.menu, AdminAuthStates.find_user),
-    F.text.regexp(r"(?i)^(ban|unban|clear)\s+\d+$"),
-)
-async def admin_user_action(
-    message: Message,
-    session: AsyncSession,
-    state: FSMContext,
-) -> None:
-    if not await _require_session(state):
-        return
-    parts = (message.text or "").split()
-    action, uid_s = parts[0].lower(), parts[1]
-    svc = AdminService(session)
-    target = await svc.find_user(uid_s)
-    if not target:
-        await message.answer("Пользователь не найден.")
-        return
-    if action == "ban":
-        await svc.ban_user(target)
-        await message.answer(f"Забанен user_id={target.id}")
-    elif action == "unban":
-        await svc.unban_user(target)
-        await message.answer(f"Разбанен user_id={target.id}")
-    else:
-        n = await svc.clear_user_unread(target.id)
-        await message.answer(f"Скрыто непрочитанных: {n}")
-
-
-@router.message(AdminAuthStates.find_user)
-async def admin_users_find(
-    message: Message,
-    session: AsyncSession,
-    db_user: User,
-    state: FSMContext,
-) -> None:
-    svc = AdminService(session)
-    q = (message.text or "").strip()
-    if q.lower() == "list":
-        users = await svc.list_users(limit=20)
-        if not users:
-            await message.answer("Пользователей нет.")
-            return
-        lines = ["<b>👥 Последние пользователи</b>", ""]
-        for u in users:
-            uname = f"@{u.username}" if u.username else "—"
-            ban = " 🚫" if u.is_banned else ""
-            lines.append(f"• {u.id} · {uname} · tg:{u.telegram_id}{ban}")
-        await message.answer("\n".join(lines))
-        return
-
-    user = await svc.find_user(q)
-    if not user:
-        await message.answer("Не найден. Попробуйте ещё раз или «list».")
-        return
-    card = await svc.user_card_stats(user)
-    text = (
-        f"<b>👤 {card['username'] or '—'}</b>\n"
-        f"id: {user.id}\n"
-        f"telegram_id: {card['telegram_id']}\n"
-        f"каналы: {card['channels']}\n"
-        f"прочитано: {card['read']}\n"
-        f"бан: {'да' if card['banned'] else 'нет'}\n"
-        f"создан: {card['created_at']}\n\n"
-        "Команды:\n"
-        f"<code>ban {user.id}</code>\n"
-        f"<code>unban {user.id}</code>\n"
-        f"<code>clear {user.id}</code>"
-    )
-    await message.answer(text)
-
-
-@router.message(AdminAuthStates.menu, F.text == BTN_NEWS)
-async def admin_news(message: Message, session: AsyncSession, state: FSMContext) -> None:
-    if not await _require_session(state):
-        return
-    stats = await AdminService(session).admin_statistics()
-    await message.answer(
-        f"<b>📰 Новости</b>\n\n"
-        f"Активных событий: <b>{stats['events']}</b>\n"
+        f"👥 <b>Пользователи</b>\n"
+        f"Всего: <b>{stats['users_total']}</b>\n\n"
+        f"📰 <b>Новости</b>\n"
         f"Постов: <b>{stats['posts']}</b>\n\n"
-        "Очистить непрочитанное у всех:\n<code>clear_all_unread</code>"
+        f"🔥 <b>Events</b>\n"
+        f"Событий: <b>{stats['events']}</b>\n\n"
+        f"📡 <b>Каналы</b>\n"
+        f"Всего: <b>{stats['channels']}</b>\n\n"
+        f"🤖 <b>AI запросы</b>\n"
+        f"Обращений: <b>{stats['ai_requests']}</b>"
     )
+    await message.answer(text)
 
 
-@router.message(AdminAuthStates.menu, F.text == "clear_all_unread")
-async def admin_clear_all(message: Message, session: AsyncSession, state: FSMContext) -> None:
+@router.message(AdminAuthStates.menu, F.text == BTN_LOGS)
+async def admin_logs_view(message: Message, state: FSMContext) -> None:
     if not await _require_session(state):
         return
-    n = await AdminService(session).clear_all_unread()
-    await message.answer(f"Скрыто непрочитанных записей: {n}")
-
-
-@router.message(AdminAuthStates.menu, F.text == BTN_CHANNELS)
-async def admin_channels(message: Message, session: AsyncSession, state: FSMContext) -> None:
-    if not await _require_session(state):
-        return
-    stats = await AdminService(session).admin_statistics()
-    await message.answer(f"<b>📡 Каналы</b>\n\nВсего в базе: <b>{stats['channels']}</b>")
-
-
-@router.message(AdminAuthStates.menu, F.text == BTN_AI)
-async def admin_ai(message: Message, session: AsyncSession, state: FSMContext) -> None:
-    if not await _require_session(state):
-        return
-    stats = await AdminService(session).admin_statistics()
-    await message.answer(
-        f"<b>🤖 AI / Graph</b>\n\n"
-        f"AI запросов: <b>{stats['ai_requests']}</b>\n"
-        f"Tokens Σ: <b>{stats['tokens_total']}</b>\n"
-        f"Nodes: <b>{stats['nodes']}</b>\n"
-        f"Edges: <b>{stats['edges']}</b>\n\n"
-        "Пересборка графа:\n🚧 Функция в развитии"
-    )
-
-
-@router.message(AdminAuthStates.menu, F.text == BTN_ADMINS)
-async def admin_admins_menu(
-    message: Message,
-    session: AsyncSession,
-    db_user: User,
-    state: FSMContext,
-) -> None:
-    if not await _require_session(state):
-        return
-    svc = AdminService(session)
-    if not await svc.is_owner(db_user):
-        await message.answer("Только для OWNER.")
-        return
-    rows = await svc.list_admins()
-    lines = ["<b>🛡 Администраторы</b>", ""]
-    for acc, u in rows:
-        uname = f"@{u.username}" if u.username else str(u.telegram_id)
-        lines.append(f"• {acc.role} · {uname} · uid={u.id}")
+    errors = admin_logs(limit=15, errors_only=True)
+    infos = [r for r in admin_logs(limit=25) if r["level"] != "ERROR"][:15]
+    lines = ["<b>📜 Логи</b>", "", "<b>Ошибки</b>"]
+    if errors:
+        for r in errors:
+            lines.append(f"❌ {r['ts']} {r['message']}")
+    else:
+        lines.append("— нет")
     lines.append("")
-    lines.append("Назначить: пришлите @username или telegram_id")
-    lines.append("Снять: <code>remove UID</code>")
-    lines.append("Сброс пароля: <code>reset UID</code>")
-    await state.set_state(AdminAuthStates.appoint_admin)
-    await message.answer(
-        "\n".join(lines),
-        reply_markup=ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text=BTN_BACK)]],
-            resize_keyboard=True,
-        ),
+    lines.append("<b>INFO</b>")
+    if infos:
+        for r in infos:
+            lines.append(f"INFO: {r['message']}")
+    else:
+        lines.append("— нет")
+    await message.answer("\n".join(lines))
+
+
+@router.message(AdminAuthStates.menu, F.text == BTN_DIAG)
+async def admin_diag(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    if not await _require_session(state):
+        return
+    snap = diagnostics_snapshot()
+    ingest = snap.get("last_ingest") or last_ingest() or {}
+    redis_ok = await ping_redis()
+    settings = get_settings()
+    errs = snap.get("last_errors") or []
+    ai = settings.ai_provider or "—"
+    text = (
+        "<b>🧪 Диагностика</b>\n\n"
+        f"Scheduler: работает ✅\n"
+        f"Uptime: {snap.get('uptime')}\n"
+        f"Parser (последний ingest):\n"
+        f"  +{ingest.get('created_messages', '—')} msgs / "
+        f"{ingest.get('processed', '—')} processed\n"
+        f"Redis: {'✅' if redis_ok else '❌'}\n"
+        f"AI: {ai}\n\n"
+        "<b>Последняя ошибка</b>\n"
     )
+    if errs:
+        text += f"{errs[0]}"
+    else:
+        text += "нет"
+    await message.answer(text)
 
 
-@router.message(AdminAuthStates.appoint_admin, F.text == BTN_BACK)
-async def admin_admins_back(
-    message: Message,
-    session: AsyncSession,
-    db_user: User,
-    state: FSMContext,
-) -> None:
-    is_owner = await AdminService(session).is_owner(db_user)
-    await state.set_state(AdminAuthStates.menu)
-    await state.update_data(admin_ok=True, is_owner=is_owner)
-    await message.answer("Админ-меню:", reply_markup=admin_menu_keyboard(is_owner=is_owner))
-
-
-@router.message(AdminAuthStates.appoint_admin)
-async def admin_admins_action(
-    message: Message,
-    session: AsyncSession,
-    db_user: User,
-    state: FSMContext,
-) -> None:
-    svc = AdminService(session)
-    if not await svc.is_owner(db_user):
-        await message.answer("Только для OWNER.")
-        return
-    text = (message.text or "").strip()
-    if text.lower().startswith("remove "):
-        uid = text.split(maxsplit=1)[1].strip()
-        if not uid.isdigit():
-            await message.answer("Использование: remove UID")
-            return
-        ok = await svc.remove_admin(target_user_id=int(uid), by=db_user)
-        await message.answer("Снято." if ok else "Не удалось (owner или не найден).")
-        return
-    if text.lower().startswith("reset "):
-        uid = text.split(maxsplit=1)[1].strip()
-        if not uid.isdigit():
-            await message.answer("Использование: reset UID")
-            return
-        acc = await svc.reset_password(int(uid))
-        await message.answer("Пароль сброшен." if acc else "Не найден.")
-        return
-
-    target = await svc.find_user(text)
-    if not target:
-        await message.answer("Пользователь не найден.")
-        return
-    await svc.appoint_admin(target=target, by=db_user)
-    await message.answer(f"Назначен admin: {target.username or target.telegram_id} (uid={target.id})")
-
-
-# Swallow unknown texts while in admin menu so they don't leak to other handlers
 @router.message(StateFilter(AdminAuthStates.menu))
 async def admin_menu_fallback(message: Message) -> None:
-    await message.answer("Выберите пункт меню или «Выйти».")
+    await message.answer("Выберите: Статистика · Логи · Диагностика · Выйти")
