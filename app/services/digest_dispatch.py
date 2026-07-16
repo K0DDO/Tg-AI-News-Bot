@@ -118,6 +118,17 @@ async def _send_one(session, bot: Bot, user: User, us: UserSettings) -> str | No
         except Exception:
             logger.exception("digest edit failed user_id=%s", user.id)
 
+    # New push: remove previous interactive screen so buttons don't stack
+    ui_chat, ui_msg = await prefs.get_ui_message(user)
+    if ui_chat and ui_msg:
+        try:
+            await bot.delete_message(chat_id=int(ui_chat), message_id=int(ui_msg))
+        except TelegramBadRequest:
+            pass
+        except Exception:
+            pass
+        await prefs.clear_ui_message(user)
+
     try:
         msg = await bot.send_message(
             chat_id,

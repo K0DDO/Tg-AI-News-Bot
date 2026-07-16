@@ -61,6 +61,8 @@ async def open_feed(
     offset: int = 0,
     edit: bool = False,
 ) -> None:
+    from app.bot.ui.nav import drop_ui_message, remember_ui_message, show_screen
+
     lang = await _lang(session, user)
     prefs = PreferencesService(session)
     us = await prefs.get_or_create(user)
@@ -88,26 +90,24 @@ async def open_feed(
                 f"{t(lang, 'no_channels_feed')}"
             )
             kb = empty_feed_keyboard(lang)
-            if edit and getattr(target, "message_id", None):
-                try:
-                    await target.edit_text(caption, reply_markup=kb, disable_web_page_preview=True)
-                    return
-                except TelegramBadRequest:
-                    pass
-            await send_banner(target, caption, reply_markup=kb, occasion="empty")
+            if edit:
+                await show_screen(target, session, user, caption, reply_markup=kb, edit=True)
+                return
+            await drop_ui_message(target.bot, session, user)
+            sent = await send_banner(target, caption, reply_markup=kb, occasion="empty")
+            await remember_ui_message(session, user, sent)
             return
         caption = (
             f"<b>🍓 {t(lang, 'no_more_news')}</b>\n\n"
             f"{t(lang, 'empty_feed_body')}"
         )
         kb = empty_feed_keyboard(lang)
-        if edit and getattr(target, "message_id", None):
-            try:
-                await target.edit_text(caption, reply_markup=kb, disable_web_page_preview=True)
-                return
-            except TelegramBadRequest:
-                pass
-        await send_banner(target, caption, reply_markup=kb, occasion="empty")
+        if edit:
+            await show_screen(target, session, user, caption, reply_markup=kb, edit=True)
+            return
+        await drop_ui_message(target.bot, session, user)
+        sent = await send_banner(target, caption, reply_markup=kb, occasion="empty")
+        await remember_ui_message(session, user, sent)
         return
     elif not items:
         text = t(lang, "no_more_news")
@@ -118,19 +118,15 @@ async def open_feed(
     kb = feed_keyboard(lang, offset=offset, page_ids=ids, has_more=has_more)
 
     # Inline navigation (next/back/refresh): edit in place
-    if edit and getattr(target, "message_id", None):
-        try:
-            await target.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
-            await prefs.save_digest_message(
-                user, target.chat.id, target.message_id, event_ids=ids
-            )
-            return
-        except TelegramBadRequest:
-            pass
+    if edit:
+        sent = await show_screen(target, session, user, text, reply_markup=kb, edit=True)
+        await prefs.save_digest_message(
+            user, sent.chat.id, sent.message_id, event_ids=ids
+        )
+        return
 
-    # Always send a NEW message when opening feed from menu/command.
-    # Editing an old digest far up the chat looks like "nothing happened".
-    sent = await target.answer(text, reply_markup=kb, disable_web_page_preview=True)
+    # Opening feed from menu: replace previous UI screen
+    sent = await show_screen(target, session, user, text, reply_markup=kb, edit=False)
     await prefs.save_digest_message(user, sent.chat.id, sent.message_id, event_ids=ids)
 
 
@@ -140,7 +136,8 @@ async def cmd_feed(event: Message | CallbackQuery, session: AsyncSession, db_use
     if isinstance(event, CallbackQuery):
         await event.answer()
         if event.message:
-            await open_feed(event.message, session, db_user, offset=0)
+            # Edit current screen into the feed (no second message)
+            await open_feed(event.message, session, db_user, offset=0, edit=True)
         return
     await open_feed(event, session, db_user, offset=0)
 

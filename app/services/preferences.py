@@ -95,8 +95,10 @@ class PreferencesService:
         - reset settings flags (welcome/tutorial/language_chosen)
         - clear read/history/favorites (UserEventState) and reactions
         - KEEP UserChannel links (sources stay visible)
+        - KEEP User row (still counted in stats)
         """
         from app.models import Reaction
+        from app.services.user_activity import log_user_action
 
         settings = await self.get_or_create(user)
         settings.welcome_seen = False
@@ -108,16 +110,26 @@ class PreferencesService:
         settings.digest_message_id = None
         settings.digest_feed_ids = None
         settings.last_digest_sent_at = None
+        settings.ui_chat_id = None
+        settings.ui_message_id = None
 
         st = await self._session.execute(
             delete(UserEventState).where(UserEventState.user_id == user.id)
         )
         rx = await self._session.execute(delete(Reaction).where(Reaction.user_id == user.id))
+        await log_user_action(
+            self._session,
+            user=user,
+            action="account_wipe_data",
+            detail="soft reset: history/reactions cleared, channels kept",
+        )
         await self._session.commit()
         return {
             "states": int(st.rowcount or 0),
             "reactions": int(rx.rowcount or 0),
             "channels": 0,
+            "purged_channels": 0,
+            "user_deleted": 0,
         }
 
     async def full_reset_user(
@@ -125,15 +137,20 @@ class PreferencesService:
         user: User,
         *,
         purge_orphan_channels: bool = False,
+        delete_user_row: bool = False,
     ) -> dict[str, int]:
         """
-        Full first-run wipe for the user:
+        Full first-run wipe:
         - reset settings + clear states/reactions
         - unlink UserChannel
-        - if purge_orphan_channels: delete Channel rows that no other user follows
-          (shared channels are kept)
+        - optionally delete Channel rows unused by anyone else
+        - optionally hard-delete User (drops from admin user count; /start recreates)
         """
         from app.models import Reaction
+        from app.services.user_activity import log_user_action
+
+        telegram_id = user.telegram_id
+        user_id = user.id
 
         settings = await self.get_or_create(user)
         settings.welcome_seen = False
@@ -150,6 +167,8 @@ class PreferencesService:
         settings.digest_message_id = None
         settings.digest_feed_ids = None
         settings.last_digest_sent_at = None
+        settings.ui_chat_id = None
+        settings.ui_message_id = None
         settings.ignored_topics = ""
         try:
             flag_modified(settings, "enabled_categories")
@@ -157,7 +176,6 @@ class PreferencesService:
         except Exception:
             pass
 
-        # Capture channel ids before unlink (for orphan purge)
         own_channel_ids = list(
             (
                 await self._session.execute(
@@ -171,20 +189,35 @@ class PreferencesService:
         )
         rx = await self._session.execute(delete(Reaction).where(Reaction.user_id == user.id))
         ch = await self._session.execute(delete(UserChannel).where(UserChannel.user_id == user.id))
+        await self._session.flush()
 
         purged = 0
         if purge_orphan_channels and own_channel_ids:
-            for cid in own_channel_ids:
-                others = await self._session.scalar(
-                    select(func.count())
-                    .select_from(UserChannel)
-                    .where(UserChannel.channel_id == cid)
-                )
-                if int(others or 0) == 0:
-                    channel = await self._session.get(Channel, cid)
-                    if channel is not None:
-                        await self._session.delete(channel)
-                        purged += 1
+            purged = await self._purge_orphan_channels(list(own_channel_ids))
+
+        action = "account_wipe_purge" if purge_orphan_channels else "account_wipe_full"
+        await log_user_action(
+            self._session,
+            user=user,
+            action=action,
+            detail=(
+                f"channels_unlinked={int(ch.rowcount or 0)} "
+                f"purged_channels={purged} delete_user={int(delete_user_row)}"
+            ),
+        )
+
+        user_deleted = 0
+        if delete_user_row:
+            # Re-fetch in case identity map is stale
+            row = await self._session.get(User, user_id)
+            if row is not None:
+                await self._session.delete(row)
+                user_deleted = 1
+                await self._session.flush()
+                # After user delete, UserChannels for this user are gone; purge again
+                if purge_orphan_channels and own_channel_ids:
+                    extra = await self._purge_orphan_channels(list(own_channel_ids))
+                    purged += extra
 
         await self._session.commit()
         return {
@@ -192,7 +225,36 @@ class PreferencesService:
             "reactions": int(rx.rowcount or 0),
             "channels": int(ch.rowcount or 0),
             "purged_channels": purged,
+            "user_deleted": user_deleted,
+            "telegram_id": telegram_id,
         }
+
+    async def _purge_orphan_channels(self, channel_ids: list[int]) -> int:
+        """Delete channels that have zero remaining UserChannel links."""
+        if not channel_ids:
+            return 0
+        # Ensure unlinks from this transaction are visible before orphan check
+        await self._session.flush()
+        still_linked = set(
+            (
+                await self._session.execute(
+                    select(UserChannel.channel_id)
+                    .where(UserChannel.channel_id.in_(channel_ids))
+                    .distinct()
+                )
+            ).scalars().all()
+        )
+        orphan_ids = [cid for cid in channel_ids if cid not in still_linked]
+        if not orphan_ids:
+            return 0
+        # Messages / user_channels cascade at DB level
+        result = await self._session.execute(
+            delete(Channel)
+            .where(Channel.id.in_(orphan_ids))
+            .execution_options(synchronize_session=False)
+        )
+        await self._session.flush()
+        return int(result.rowcount or 0)
 
     async def mark_welcome_seen(self, user: User) -> None:
         settings = await self.get_or_create(user)
@@ -230,13 +292,49 @@ class PreferencesService:
         settings.digest_message_id = message_id
         if event_ids is not None:
             settings.digest_feed_ids = [int(x) for x in event_ids]
+        # Feed is the active screen — keep UI pointer in sync so menu nav deletes it
+        settings.ui_chat_id = chat_id
+        settings.ui_message_id = message_id
         await self._session.commit()
 
     async def clear_digest_message(self, user: User) -> None:
         settings = await self.get_or_create(user)
+        # If UI pointer points at digest message, clear both
+        if (
+            settings.ui_message_id
+            and settings.digest_message_id
+            and settings.ui_message_id == settings.digest_message_id
+        ):
+            settings.ui_chat_id = None
+            settings.ui_message_id = None
         settings.digest_chat_id = None
         settings.digest_message_id = None
         settings.digest_feed_ids = None
+        await self._session.commit()
+
+    async def save_ui_message(self, user: User, chat_id: int, message_id: int) -> None:
+        settings = await self.get_or_create(user)
+        settings.ui_chat_id = chat_id
+        settings.ui_message_id = message_id
+        await self._session.commit()
+
+    async def get_ui_message(self, user: User) -> tuple[int | None, int | None]:
+        settings = await self.get_or_create(user)
+        return settings.ui_chat_id, settings.ui_message_id
+
+    async def clear_ui_message(self, user: User) -> None:
+        settings = await self.get_or_create(user)
+        # Navigating away from feed — drop digest pointer if it was the same message
+        if (
+            settings.ui_message_id
+            and settings.digest_message_id
+            and settings.ui_message_id == settings.digest_message_id
+        ):
+            settings.digest_chat_id = None
+            settings.digest_message_id = None
+            settings.digest_feed_ids = None
+        settings.ui_chat_id = None
+        settings.ui_message_id = None
         await self._session.commit()
 
     async def digest_feed_still_unread(self, user: User) -> bool:

@@ -120,23 +120,42 @@ def _lang_pick_text(lang: str) -> str:
     return f"<b>🌍 {t(lang, 'choose_language')}</b>"
 
 
-async def send_welcome_onboarding(message: Message, lang: str = "ru") -> None:
-    await send_banner(
+async def send_welcome_onboarding(
+    message: Message,
+    lang: str = "ru",
+    *,
+    session: AsyncSession | None = None,
+    user: User | None = None,
+) -> None:
+    from app.bot.ui.nav import drop_ui_message, remember_ui_message
+
+    if session is not None and user is not None:
+        await drop_ui_message(message.bot, session, user)
+    sent = await send_banner(
         message,
         _welcome_caption(lang),
         reply_markup=onboarding_start_keyboard(lang),
         occasion="start",
     )
+    if session is not None and user is not None:
+        await remember_ui_message(session, user, sent)
 
 
 async def send_home(message: Message, session: AsyncSession, user: User) -> None:
+    from app.bot.ui.nav import push_reply_keyboard, show_screen
+
     prefs = PreferencesService(session)
     settings = await prefs.get_or_create(user)
     lang = settings.language or "ru"
 
     # Incomplete onboarding → branded start
     if not settings.welcome_seen:
-        await send_welcome_onboarding(message, lang if settings.language_chosen else "ru")
+        await send_welcome_onboarding(
+            message,
+            lang if settings.language_chosen else "ru",
+            session=session,
+            user=user,
+        )
         return
 
     stats = await prefs.user_stats(user)
@@ -157,8 +176,15 @@ async def send_home(message: Message, session: AsyncSession, user: User) -> None
         saved=stats["saved"],
         liked=stats["liked"],
     )
-    await message.answer(t(lang, "menu_hint"), reply_markup=main_menu(lang))
-    await message.answer(text, reply_markup=home_keyboard(lang))
+    # Refresh reply keyboard without leaving an extra message
+    await push_reply_keyboard(message, main_menu(lang))
+    await show_screen(
+        message,
+        session,
+        user,
+        text,
+        reply_markup=home_keyboard(lang),
+    )
 
 
 async def show_while_preparing(message: Message, lang: str) -> None:
@@ -177,9 +203,44 @@ async def cmd_start(message: Message, session: AsyncSession, db_user: User) -> N
 @router.callback_query(F.data == "nav:home")
 async def go_home(event: Message | CallbackQuery, session: AsyncSession, db_user: User) -> None:
     if isinstance(event, CallbackQuery):
-        await event.answer()
-        if event.message:
-            await send_home(event.message, session, db_user)
+        from app.bot.ui.nav import replace_screen
+        from app.health import last_ingest_at
+        from app.models import Message as TgMessage
+
+        prefs = PreferencesService(session)
+        settings = await prefs.get_or_create(db_user)
+        lang = settings.language or "ru"
+        if not settings.welcome_seen:
+            await event.answer()
+            if event.message:
+                await send_welcome_onboarding(
+                    event.message,
+                    lang if settings.language_chosen else "ru",
+                    session=session,
+                    user=db_user,
+                )
+            return
+        stats = await prefs.user_stats(db_user)
+        last = last_ingest_at()
+        if last is None:
+            last = await session.scalar(select(func.max(TgMessage.created_at)))
+            if last is None:
+                last = await session.scalar(select(func.max(Event.updated_at)))
+        text = format_home(
+            lang,
+            last_update=last,
+            tz_name=settings.timezone or "Europe/Moscow",
+            read=stats["read"],
+            saved=stats["saved"],
+            liked=stats["liked"],
+        )
+        await replace_screen(
+            event,
+            text,
+            reply_markup=home_keyboard(lang),
+            session=session,
+            user=db_user,
+        )
         return
     await send_home(event, session, db_user)
 
@@ -191,6 +252,8 @@ async def ob_begin(callback: CallbackQuery, session: AsyncSession, db_user: User
         callback,
         _lang_pick_text(lang),
         reply_markup=language_keyboard(prefix="oblang"),
+        session=session,
+        user=db_user,
     )
 
 
@@ -207,7 +270,7 @@ async def set_ob_lang(callback: CallbackQuery, session: AsyncSession, db_user: U
         f"✅ {t(code, 'ob_lang_picked', name=label)}\n\n"
         f"{_privacy_caption(code)}"
     )
-    await replace_screen(callback, text, reply_markup=privacy_keyboard(code))
+    await replace_screen(callback, text, reply_markup=privacy_keyboard(code), session=session, user=db_user)
 
 
 @router.callback_query(F.data == "ob:privacy_full")
@@ -217,6 +280,8 @@ async def ob_privacy_full(callback: CallbackQuery, session: AsyncSession, db_use
         callback,
         format_privacy(lang),
         reply_markup=privacy_keyboard(lang),
+        session=session,
+        user=db_user,
     )
 
 
@@ -227,6 +292,8 @@ async def ob_privacy_ok(callback: CallbackQuery, session: AsyncSession, db_user:
         callback,
         _channels_caption(lang),
         reply_markup=onboarding_channels_keyboard(lang),
+        session=session,
+        user=db_user,
     )
 
 
@@ -245,6 +312,8 @@ async def ob_add_channels(
         f"<b>📡 {t(lang, 'ch_add')}</b>\n\n"
         f"{t(lang, 'channels_hint')}\n\n"
         f"<code>@appleinsider\n@technology\nhttps://t.me/news</code>",
+        session=session,
+        user=db_user,
     )
 
 
@@ -255,6 +324,8 @@ async def ob_skip_channels(callback: CallbackQuery, session: AsyncSession, db_us
         callback,
         _while_caption(lang),
         reply_markup=onboarding_while_keyboard(lang),
+        session=session,
+        user=db_user,
     )
 
 
@@ -270,6 +341,8 @@ async def ob_configure(callback: CallbackQuery, session: AsyncSession, db_user: 
         callback,
         format_settings(lang, settings),
         reply_markup=settings_keyboard(lang),
+        session=session,
+        user=db_user,
     )
 
 
@@ -285,6 +358,8 @@ async def ob_tour(callback: CallbackQuery, session: AsyncSession, db_user: User)
         callback,
         f"<b>{t(lang, title_k)}</b>\n\n{t(lang, body_k)}",
         reply_markup=onboarding_tour_keyboard(lang, step, len(_TOUR_KEYS)),
+        session=session,
+        user=db_user,
     )
 
 
@@ -292,6 +367,8 @@ async def ob_tour(callback: CallbackQuery, session: AsyncSession, db_user: User)
 @router.callback_query(F.data == "ob:skip")
 async def ob_finish(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     from aiogram.exceptions import TelegramBadRequest
+
+    from app.bot.ui.nav import push_reply_keyboard, remember_ui_message
 
     prefs = PreferencesService(session)
     await prefs.mark_welcome_seen(db_user)
@@ -311,13 +388,14 @@ async def ob_finish(callback: CallbackQuery, session: AsyncSession, db_user: Use
             await msg.edit_reply_markup(reply_markup=None)
         except TelegramBadRequest:
             pass
-    await msg.answer(t(lang, "menu_hint"), reply_markup=main_menu(lang))
-    await send_banner(
+    await push_reply_keyboard(msg, main_menu(lang))
+    sent = await send_banner(
         msg,
         _done_caption(lang),
         reply_markup=onboarding_done_keyboard(lang),
         occasion="done",
     )
+    await remember_ui_message(session, db_user, sent)
 
 
 @router.callback_query(F.data == "nav:howto")
@@ -325,6 +403,8 @@ async def ob_finish(callback: CallbackQuery, session: AsyncSession, db_user: Use
 async def how_to_use(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     """How to use — with banner cover (replaces old auto-tour)."""
     from aiogram.exceptions import TelegramBadRequest
+
+    from app.bot.ui.nav import drop_ui_message, remember_ui_message
 
     lang = await _lang(session, db_user)
     try:
@@ -334,16 +414,20 @@ async def how_to_use(callback: CallbackQuery, session: AsyncSession, db_user: Us
     msg = callback.message
     if not msg:
         return
-    try:
-        await msg.delete()
-    except TelegramBadRequest:
-        pass
-    await send_banner(
+    await drop_ui_message(
+        msg.bot,
+        session,
+        db_user,
+        also_message_id=msg.message_id,
+        chat_id=msg.chat.id,
+    )
+    sent = await send_banner(
         msg,
         format_how_to_use(lang),
         reply_markup=how_to_keyboard(lang),
         occasion="howto",
     )
+    await remember_ui_message(session, db_user, sent)
 
 
 @router.callback_query(F.data == "nav:settings")
@@ -358,6 +442,8 @@ async def nav_settings(callback: CallbackQuery, session: AsyncSession, db_user: 
         callback,
         format_settings(lang, settings),
         reply_markup=settings_keyboard(lang),
+        session=session,
+        user=db_user,
     )
 
 
@@ -371,7 +457,7 @@ async def nav_search(
     await state.set_state(SearchStates.waiting_query)
     await callback.answer()
     if callback.message:
-        await ask_search(callback.message, session, db_user)
+        await ask_search(callback.message, session, db_user, replace_from=callback.message)
 
 
 # Reply keyboard routing

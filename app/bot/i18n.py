@@ -149,10 +149,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "del_acc_cancel": "Отмена",
         "del_acc_cancelled": "Удаление отменено.",
         "del_acc_done_data": "Данные аккаунта очищены. Можно начать заново.",
-        "del_acc_done_full": "Аккаунт очищен, каналы отвязаны. Можно начать заново.",
+        "del_acc_done_full": "Аккаунт удалён из базы, каналы отвязаны. Можно начать заново через /start.",
         "del_acc_done_purge": (
-            "Аккаунт очищен. Уникальные каналы удалены из базы "
-            "(общие с другими пользователями сохранены)."
+            "Аккаунт удалён. Уникальные каналы убраны из базы "
+            "(общие с другими сохранены). /start создаст аккаунт заново."
         ),
         "channels_hint": "Пришлите список @username или ссылок — по одному в строке.",
         "ch_add": "Добавить",
@@ -441,10 +441,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "del_acc_cancel": "Cancel",
         "del_acc_cancelled": "Deletion cancelled.",
         "del_acc_done_data": "Account data cleared. You can start over.",
-        "del_acc_done_full": "Account cleared and channels unlinked. You can start over.",
+        "del_acc_done_full": "Account removed from the database, channels unlinked. Use /start to begin again.",
         "del_acc_done_purge": (
-            "Account cleared. Unique channels removed from the database "
-            "(shared with other users were kept)."
+            "Account removed. Unique channels deleted from the database "
+            "(shared ones kept). /start creates a new account."
         ),
         "channels_hint": "Send @usernames or links — one per line.",
         "ch_add": "Add",

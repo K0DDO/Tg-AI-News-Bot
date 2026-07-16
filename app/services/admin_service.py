@@ -135,11 +135,21 @@ class AdminService:
 
         return await PreferencesService(self._session).soft_reset_user(user)
 
-    async def full_reset_user(self, user: User) -> dict[str, int]:
-        """Delegate — channels unlinked (kept in DB), user looks brand new."""
+    async def full_reset_user(
+        self,
+        user: User,
+        *,
+        purge_orphan_channels: bool = True,
+        delete_user_row: bool = True,
+    ) -> dict[str, int]:
+        """Admin wipe: unlink, purge unique channels, remove user from DB."""
         from app.services.preferences import PreferencesService
 
-        return await PreferencesService(self._session).full_reset_user(user)
+        return await PreferencesService(self._session).full_reset_user(
+            user,
+            purge_orphan_channels=purge_orphan_channels,
+            delete_user_row=delete_user_row,
+        )
 
     async def ban_user(self, target: User) -> None:
         target.is_banned = True
@@ -189,6 +199,8 @@ class AdminService:
         return [(a, u) for a, u in rows]
 
     async def user_card_stats(self, user: User) -> dict:
+        from app.models import AiUsageLog, UserActionLog
+
         ch_n = await self._session.scalar(
             select(func.count())
             .select_from(UserChannel)
@@ -199,13 +211,68 @@ class AdminService:
             .select_from(UserEventState)
             .where(UserEventState.user_id == user.id, UserEventState.is_read.is_(True))
         )
+        ai_n = await self._session.scalar(
+            select(func.count())
+            .select_from(AiUsageLog)
+            .where(AiUsageLog.user_id == user.id)
+        ) or 0
+        tokens_in = await self._session.scalar(
+            select(func.coalesce(func.sum(AiUsageLog.tokens_in), 0)).where(
+                AiUsageLog.user_id == user.id
+            )
+        ) or 0
+        tokens_out = await self._session.scalar(
+            select(func.coalesce(func.sum(AiUsageLog.tokens_out), 0)).where(
+                AiUsageLog.user_id == user.id
+            )
+        ) or 0
+        ai_by_op = list(
+            (
+                await self._session.execute(
+                    select(AiUsageLog.operation, func.count())
+                    .where(AiUsageLog.user_id == user.id)
+                    .group_by(AiUsageLog.operation)
+                    .order_by(func.count().desc())
+                    .limit(8)
+                )
+            ).all()
+        )
+        # Prefer user_id; also match telegram_id for actions after hard-delete recreate
+        actions = list(
+            (
+                await self._session.execute(
+                    select(UserActionLog)
+                    .where(
+                        or_(
+                            UserActionLog.user_id == user.id,
+                            UserActionLog.telegram_id == user.telegram_id,
+                        )
+                    )
+                    .order_by(UserActionLog.created_at.desc())
+                    .limit(12)
+                )
+            ).scalars().all()
+        )
         return {
             "channels": int(ch_n or 0),
             "read": int(read_n or 0),
             "banned": bool(user.is_banned),
             "created_at": user.created_at,
+            "last_seen_at": user.last_seen_at,
             "telegram_id": user.telegram_id,
             "username": user.username,
+            "ai_requests": int(ai_n),
+            "tokens_in": int(tokens_in),
+            "tokens_out": int(tokens_out),
+            "ai_by_operation": [(str(op), int(n)) for op, n in ai_by_op],
+            "actions": [
+                {
+                    "action": a.action,
+                    "detail": a.detail,
+                    "ts": a.created_at,
+                }
+                for a in actions
+            ],
         }
 
     async def admin_statistics(self) -> dict:

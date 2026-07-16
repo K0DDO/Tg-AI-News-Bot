@@ -36,6 +36,8 @@ async def _render_history(
     query: str | None = None,
     edit: bool = False,
 ) -> None:
+    from app.bot.ui.nav import show_screen
+
     lang = await PreferencesService(session).lang(user)
     since = None
     if days and days > 0:
@@ -59,13 +61,7 @@ async def _render_history(
         total_pages=total_pages,
         query_token=q_token,
     )
-    if edit:
-        try:
-            await target.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
-            return
-        except Exception:
-            pass
-    await target.answer(text, reply_markup=kb, disable_web_page_preview=True)
+    await show_screen(target, session, user, text, reply_markup=kb, edit=edit)
 
 
 async def show_favorites(message: Message, session: AsyncSession, db_user: User) -> None:

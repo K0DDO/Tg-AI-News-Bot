@@ -8,6 +8,7 @@ from app.models.knowledge import EDGE_TYPES, NODE_TYPES, Edge, EventNode, Node
 from app.models.message import Message, TelegramPost
 from app.models.reaction import Reaction
 from app.models.user import User
+from app.models.user_action import UserActionLog
 from app.models.user_prefs import UserEvent, UserEventState, UserNewsState, UserSettings
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "UserEvent",
     "UserEventState",
     "UserNewsState",
+    "UserActionLog",
     "AdminAccount",
     "Channel",
     "UserChannel",

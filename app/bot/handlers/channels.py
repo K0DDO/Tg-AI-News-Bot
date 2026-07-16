@@ -22,8 +22,13 @@ router = Router(name="channels")
 
 
 async def channels_home(message: Message, session: AsyncSession, user: User) -> None:
+    from app.bot.ui.nav import show_screen
+
     lang = await PreferencesService(session).lang(user)
-    await message.answer(
+    await show_screen(
+        message,
+        session,
+        user,
         f"<b>📂 {t(lang, 'channels')}</b>\n\n"
         f"{t(lang, 'channels_hint')}\n\n"
         f"<code>@channel1\n@channel2\nhttps://t.me/channel3\nhttps://telegram.me/channel4</code>",
@@ -211,18 +216,14 @@ async def _show_list(
     *,
     edit: bool = False,
 ) -> None:
+    from app.bot.ui.nav import show_screen
+
     lang = await PreferencesService(session).lang(user)
     pairs = await ChannelService(session).list_user_channels(user.id)
     items = [(ch.id, ch.title, link.is_active) for ch, link in pairs]
     text = f"<b>📋 {t(lang, 'ch_list')}</b>\n\n{t(lang, 'ch_list_hint')}: <b>{len(items)}</b>"
     kb = channel_list_keyboard(items, lang)
-    if edit:
-        try:
-            await message.edit_text(text, reply_markup=kb)
-            return
-        except TelegramBadRequest:
-            pass
-    await message.answer(text, reply_markup=kb)
+    await show_screen(message, session, user, text, reply_markup=kb, edit=edit)
 
 
 @router.callback_query(F.data.startswith("ch:tog:"))

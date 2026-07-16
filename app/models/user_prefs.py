@@ -54,6 +54,9 @@ class UserSettings(Base):
     digest_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     digest_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     digest_feed_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Last interactive bot screen (home/feed/settings/…) — deleted before next screen
+    ui_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    ui_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Product upgrade fields
     timezone: Mapped[str] = mapped_column(

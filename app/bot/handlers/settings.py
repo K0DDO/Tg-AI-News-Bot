@@ -48,20 +48,14 @@ async def open_settings(
     *,
     edit: bool = False,
 ) -> None:
-    from aiogram.exceptions import TelegramBadRequest
+    from app.bot.ui.nav import show_screen
 
     prefs = PreferencesService(session)
     settings = await prefs.get_or_create(user)
     lang = settings.language or "ru"
     text = format_settings(lang, settings)
     kb = settings_keyboard(lang)
-    if edit:
-        try:
-            await message.edit_text(text, reply_markup=kb)
-            return
-        except TelegramBadRequest:
-            pass
-    await message.answer(text, reply_markup=kb)
+    await show_screen(message, session, user, text, reply_markup=kb, edit=edit)
 
 
 @router.message(Command("settings"))
@@ -85,6 +79,8 @@ async def set_lang_menu(callback: CallbackQuery, session: AsyncSession, db_user:
         callback,
         f"🌐 {t(lang, 'language')}",
         reply_markup=language_keyboard(prefix="uilang"),
+        session=session,
+        user=db_user,
     )
 
 
@@ -92,6 +88,7 @@ async def set_lang_menu(callback: CallbackQuery, session: AsyncSession, db_user:
 async def set_ui_lang(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     from app.bot.i18n import LANG_LABELS, SUPPORTED_LANGS
     from app.bot.keyboards.reply import main_menu
+    from app.bot.ui.nav import push_reply_keyboard
 
     code = (callback.data or "").split(":", 1)[1]
     if code not in SUPPORTED_LANGS:
@@ -101,8 +98,7 @@ async def set_ui_lang(callback: CallbackQuery, session: AsyncSession, db_user: U
     label = LANG_LABELS.get(code, code)
     await callback.answer(f"✅ {label}")
     if callback.message:
-        # Reply keyboard only updates when a new message carries it
-        await callback.message.answer(t(code, "menu_hint"), reply_markup=main_menu(code))
+        await push_reply_keyboard(callback.message, main_menu(code))
         await open_settings(callback.message, session, db_user, edit=True)
 
 
@@ -529,10 +525,18 @@ async def del_account_confirm_typed(
 
     prefs = PreferencesService(session)
     if mode == "purge":
-        await prefs.full_reset_user(db_user, purge_orphan_channels=True)
+        await prefs.full_reset_user(
+            db_user,
+            purge_orphan_channels=True,
+            delete_user_row=True,
+        )
         done = t(lang, "del_acc_done_purge")
     elif mode == "full":
-        await prefs.full_reset_user(db_user)
+        await prefs.full_reset_user(
+            db_user,
+            purge_orphan_channels=False,
+            delete_user_row=True,
+        )
         done = t(lang, "del_acc_done_full")
     else:
         await prefs.soft_reset_user(db_user)

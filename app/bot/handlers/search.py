@@ -24,13 +24,23 @@ router = Router(name="search")
 _QUERY_CACHE: dict[str, dict] = {}
 
 
-async def ask_search(message: Message, session: AsyncSession, db_user: User) -> None:
+async def ask_search(
+    message: Message,
+    session: AsyncSession,
+    db_user: User,
+    *,
+    replace_from: Message | None = None,
+) -> None:
+    from app.bot.ui.nav import show_screen
+
     lang = await PreferencesService(session).lang(db_user)
-    await message.answer(
+    text = (
         f"<b>🔍 {t(lang, 'search')}</b>\n\n"
         f"{t(lang, 'search_ask')}\n\n"
         f"<i>{t(lang, 'search_examples')}</i>"
     )
+    target = replace_from or message
+    await show_screen(target, session, db_user, text, edit=replace_from is not None)
 
 
 @router.message(Command("search"))
@@ -66,14 +76,21 @@ async def _run_search(
     lang = await PreferencesService(session).lang(db_user)
     us = await PreferencesService(session).get_or_create(db_user)
     news_lang = us.news_language or lang
-    wait = edit_message or await message.answer(
-        t(lang, "deep_searching") if deep else t(lang, "searching")
-    )
-    if deep and edit_message:
-        try:
-            await edit_message.edit_text(t(lang, "deep_searching"))
-        except TelegramBadRequest:
-            pass
+    from app.bot.ui.nav import drop_ui_message, remember_ui_message
+
+    if edit_message is None:
+        await drop_ui_message(message.bot, session, db_user)
+        wait = await message.answer(
+            t(lang, "deep_searching") if deep else t(lang, "searching")
+        )
+        await remember_ui_message(session, db_user, wait)
+    else:
+        wait = edit_message
+        if deep:
+            try:
+                await edit_message.edit_text(t(lang, "deep_searching"))
+            except TelegramBadRequest:
+                pass
     result = await SearchService(session).search_full(
         query,
         limit=10 if deep else 8,
@@ -107,10 +124,17 @@ async def _run_search(
     )
     try:
         await wait.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
+        from app.bot.ui.nav import remember_ui_message
+
+        await remember_ui_message(session, db_user, wait)
     except TelegramBadRequest:
-        await message.answer(text, reply_markup=kb, disable_web_page_preview=True)
+        from app.bot.ui.nav import show_screen
+
+        await show_screen(message, session, db_user, text, reply_markup=kb)
     except Exception:
-        await message.answer(text, reply_markup=kb, disable_web_page_preview=True)
+        from app.bot.ui.nav import show_screen
+
+        await show_screen(message, session, db_user, text, reply_markup=kb)
 
 
 @router.message(SearchStates.waiting_query)

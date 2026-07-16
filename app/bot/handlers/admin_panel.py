@@ -98,6 +98,14 @@ def _user_actions_kb(
     actor_is_owner: bool,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="📊 Статистика пользователя",
+                callback_data=f"adm:ustats:{user_id}",
+            )
+        ]
+    )
     if is_banned:
         rows.append(
             [InlineKeyboardButton(text="✅ Разбанить", callback_data=f"adm:unban:{user_id}")]
@@ -117,7 +125,7 @@ def _user_actions_kb(
     rows.append(
         [
             InlineKeyboardButton(
-                text="🧹 Полная очистка",
+                text="🧹 Удалить аккаунт + уникальные каналы",
                 callback_data=f"adm:wipe:{user_id}",
             )
         ]
@@ -558,6 +566,110 @@ async def admin_users_find(
     )
 
 
+@router.callback_query(F.data == "adm:users_back")
+async def admin_users_back(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await state.set_state(AdminAuthStates.find_user)
+    await state.update_data(admin_ok=True)
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(
+            "Пришлите Telegram ID / @username / внутренний id.\n\n"
+            f"Или «{BTN_CANCEL}» в меню."
+        )
+
+
+@router.callback_query(F.data.startswith("adm:ustats:"))
+async def admin_user_stats(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    uid = int((callback.data or "").split(":")[2])
+    svc = AdminService(session)
+    target = (await session.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+    if not target:
+        await callback.answer("Не найден", show_alert=True)
+        return
+    stats = await svc.user_card_stats(target)
+    acc = await svc.get_account(target.id)
+    actor_owner = await svc.is_owner(db_user)
+
+    def _fmt_ts(dt) -> str:
+        if dt is None:
+            return "—"
+        if getattr(dt, "tzinfo", None) is None:
+            from datetime import timezone as tz
+
+            dt = dt.replace(tzinfo=tz.utc)
+        return dt.astimezone().strftime("%d.%m %H:%M")
+
+    _ACTION_LABELS = {
+        "account_wipe_data": "🧹 Очистка данных",
+        "account_wipe_full": "📡 Очистка + отвязка каналов",
+        "account_wipe_purge": "🗄 Очистка + удаление каналов/аккаунта",
+        "admin_ban": "🚫 Бан",
+        "admin_unban": "✅ Разбан",
+        "admin_soft_reset": "🔄 Soft-reset (админ)",
+        "admin_full_wipe": "🧹 Full-wipe (админ)",
+    }
+    lines = [
+        f"<b>📊 Статистика</b> {_role_emoji(acc, is_banned=bool(target.is_banned))}",
+        f"Telegram: {_tg_line(target)}",
+        "",
+        f"📡 Каналы: <b>{stats['channels']}</b>",
+        f"👁 Прочитано: <b>{stats['read']}</b>",
+        f"🤖 API (AI) запросов: <b>{stats['ai_requests']}</b>",
+        f"🔢 Токены: in <b>{stats['tokens_in']}</b> / out <b>{stats['tokens_out']}</b>",
+    ]
+    ai_ops = stats.get("ai_by_operation") or []
+    if ai_ops:
+        lines.append("⚙️ По операциям:")
+        for op, n in ai_ops:
+            lines.append(f"  · <code>{op}</code>: {n}")
+    lines.extend(
+        [
+            f"📅 Регистрация: {_fmt_ts(stats.get('created_at'))}",
+            f"🕒 Last seen: {_fmt_ts(stats.get('last_seen_at'))}",
+            "",
+            "<b>Последние действия</b>",
+        ]
+    )
+    actions = stats.get("actions") or []
+    if not actions:
+        lines.append("— пока нет")
+    else:
+        for a in actions:
+            label = _ACTION_LABELS.get(a["action"], a["action"])
+            detail = (a.get("detail") or "").strip()
+            extra = f" — {detail[:80]}" if detail else ""
+            lines.append(f"• {_fmt_ts(a['ts'])} {label}{extra}")
+
+    await callback.answer()
+    if callback.message:
+        await _track(state, callback.message)
+        await callback.message.edit_text(
+            "\n".join(lines),
+            reply_markup=_user_actions_kb(
+                target.id,
+                is_banned=bool(target.is_banned),
+                target_acc=acc,
+                actor_is_owner=actor_owner,
+            ),
+        )
+
+
 @router.callback_query(F.data.startswith("adm:ban:"))
 async def admin_ban(
     callback: CallbackQuery,
@@ -575,6 +687,10 @@ async def admin_ban(
         await callback.answer("Не найден", show_alert=True)
         return
     await svc.ban_user(target)
+    from app.services.user_activity import log_user_action
+
+    await log_user_action(session, user=target, action="admin_ban", detail=f"by={db_user.id}")
+    await session.commit()
     record_admin_log("INFO", f"Banned user id={uid}")
     await callback.answer("Забанен")
     await _refresh_user_card(callback, session, state, target, db_user)
@@ -597,6 +713,10 @@ async def admin_unban(
         await callback.answer("Не найден", show_alert=True)
         return
     await svc.unban_user(target)
+    from app.services.user_activity import log_user_action
+
+    await log_user_action(session, user=target, action="admin_unban", detail=f"by={db_user.id}")
+    await session.commit()
     record_admin_log("INFO", f"Unbanned user id={uid}")
     await callback.answer("Разбанен")
     await _refresh_user_card(callback, session, state, target, db_user)
@@ -623,6 +743,15 @@ async def admin_soft_reset(
         "INFO",
         f"Soft-reset user id={uid} states={stats.get('states')} reactions={stats.get('reactions')}",
     )
+    from app.services.user_activity import log_user_action
+
+    await log_user_action(
+        session,
+        user=target,
+        action="admin_soft_reset",
+        detail=f"by={db_user.id} states={stats.get('states')}",
+    )
+    await session.commit()
     await callback.answer("Сброшен как новый", show_alert=True)
     acc = await svc.get_account(target.id)
     actor_owner = await svc.is_owner(db_user)
@@ -658,27 +787,44 @@ async def admin_full_wipe(
     if not target:
         await callback.answer("Не найден", show_alert=True)
         return
-    stats = await svc.full_reset_user(target)
+    if target.id == db_user.id:
+        await callback.answer("Нельзя удалить себя", show_alert=True)
+        return
+    tid = target.telegram_id
+    uname = f"@{target.username}" if target.username else "—"
+    from app.services.user_activity import log_user_action
+
+    await log_user_action(
+        session,
+        user=target,
+        action="admin_full_wipe",
+        detail=f"by={db_user.id}",
+    )
+    stats = await svc.full_reset_user(
+        target,
+        purge_orphan_channels=True,
+        delete_user_row=True,
+    )
     record_admin_log(
         "INFO",
-        f"Full-wipe user id={uid} states={stats.get('states')} "
-        f"channels={stats.get('channels')} reactions={stats.get('reactions')}",
+        f"Full-wipe user id={uid} tid={tid} purged={stats.get('purged_channels')} "
+        f"deleted={stats.get('user_deleted')}",
     )
-    await callback.answer("Полностью очищен", show_alert=True)
-    acc = await svc.get_account(target.id)
-    actor_owner = await svc.is_owner(db_user)
+    await callback.answer("Пользователь удалён из БД", show_alert=True)
     if callback.message:
         await _track(state, callback.message)
         await callback.message.edit_text(
-            _user_card(target, acc)
-            + "\n\n🧹 Полная очистка: как будто бот впервые.\n"
-            "📡 Связи с каналами сняты (сами каналы в базе остались).\n"
-            "Пусть нажмёт /start и добавит каналы заново.",
-            reply_markup=_user_actions_kb(
-                target.id,
-                is_banned=bool(target.is_banned),
-                target_acc=acc,
-                actor_is_owner=actor_owner,
+            f"<b>🧹 Пользователь удалён</b>\n\n"
+            f"Telegram: <code>{tid}</code> {uname}\n"
+            f"Отвязано каналов: <b>{stats.get('channels', 0)}</b>\n"
+            f"Удалено уникальных каналов из БД: <b>{stats.get('purged_channels', 0)}</b>\n"
+            f"Запись пользователя: "
+            f"{'удалена' if stats.get('user_deleted') else 'сохранена'}\n\n"
+            "При следующем /start аккаунт создастся заново.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 К поиску", callback_data="adm:users_back")]
+                ]
             ),
         )
 
