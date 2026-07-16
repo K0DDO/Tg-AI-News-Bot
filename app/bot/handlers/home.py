@@ -12,8 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.brand import send_banner
 from app.bot.i18n import (
     LANG_LABELS,
-    btn_channels,
-    btn_favorites,
     btn_feed,
     btn_search,
     btn_settings,
@@ -396,17 +394,3 @@ async def reply_trends(message: Message, session: AsyncSession, db_user: User) -
     from app.bot.handlers.trends import show_trends_msg
 
     await show_trends_msg(message, session, db_user)
-
-
-@router.message(F.text.func(lambda s: bool(s) and any(s == btn_channels(l) for l in ("ru", "en", "de", "es"))))
-async def reply_channels(message: Message, session: AsyncSession, db_user: User) -> None:
-    from app.bot.handlers.channels import channels_home
-
-    await channels_home(message, session, db_user)
-
-
-@router.message(F.text.func(lambda s: bool(s) and any(s == btn_favorites(l) for l in ("ru", "en", "de", "es"))))
-async def reply_favorites(message: Message, session: AsyncSession, db_user: User) -> None:
-    from app.bot.handlers.library import show_favorites
-
-    await show_favorites(message, session, db_user)

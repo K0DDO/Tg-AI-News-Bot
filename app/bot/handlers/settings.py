@@ -89,6 +89,7 @@ async def set_lang_menu(callback: CallbackQuery, session: AsyncSession, db_user:
 @router.callback_query(F.data.startswith("uilang:"))
 async def set_ui_lang(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     from app.bot.i18n import LANG_LABELS, SUPPORTED_LANGS
+    from app.bot.keyboards.reply import main_menu
 
     code = (callback.data or "").split(":", 1)[1]
     if code not in SUPPORTED_LANGS:
@@ -98,6 +99,8 @@ async def set_ui_lang(callback: CallbackQuery, session: AsyncSession, db_user: U
     label = LANG_LABELS.get(code, code)
     await callback.answer(f"✅ {label}")
     if callback.message:
+        # Reply keyboard only updates when a new message carries it
+        await callback.message.answer(t(code, "menu_hint"), reply_markup=main_menu(code))
         await open_settings(callback.message, session, db_user, edit=True)
 
 
