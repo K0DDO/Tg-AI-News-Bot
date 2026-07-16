@@ -15,7 +15,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.bot.handlers import setup_routers
 from app.bot.middlewares import DbUserMiddleware
 from app.config import get_settings
-from app.health import record_error, record_ingest, record_admin_log
+from app.health import record_admin_log, record_error, record_ingest, set_scheduler_running
 from app.logging_setup import setup_logging
 from app.services.digest_dispatch import run_digest_cycle
 from app.services.redis_client import close_redis, create_fsm_storage, ping_redis
@@ -26,10 +26,12 @@ logger = logging.getLogger("briefly.runtime")
 
 def _wrap_job(name: str, coro_fn):
     """Never let a single job crash the scheduler / process."""
+    from app.health import record_job_run
 
     async def _runner(*args, **kwargs):
         try:
             result = await coro_fn(*args, **kwargs)
+            record_job_run(name)
             if name == "ingest" and isinstance(result, dict):
                 record_ingest(result)
             return result
@@ -99,6 +101,7 @@ async def _start_scheduler(settings) -> AsyncIOScheduler:
         coalesce=True,
     )
     scheduler.start()
+    set_scheduler_running(True)
     logger.info("Scheduler started (poll every %ss)", settings.parser_poll_interval_seconds)
     return scheduler
 
@@ -182,6 +185,7 @@ async def run() -> None:
 
     try:
         scheduler.shutdown(wait=False)
+        set_scheduler_running(False)
     except Exception:
         logger.exception("Scheduler shutdown failed")
 

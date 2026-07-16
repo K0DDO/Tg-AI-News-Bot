@@ -623,11 +623,32 @@ class FeedService:
             return p + imp * (0.6 + 0.4 * (w / 5.0))
 
         ranked = sorted(raw_rows, key=lambda r: score_row(r[0], r[1]), reverse=True)
-        events = [r[0] for r in ranked]
+        events = self._collapse_near_duplicates([r[0] for r in ranked])
         page = events[offset : offset + page_size]
         has_more = len(events) > offset + page_size
         total = offset + len(page) + (1 if has_more else 0)
         return page, total
+
+    @staticmethod
+    def _collapse_near_duplicates(events: list[Event]) -> list[Event]:
+        """Keep highest-ranked event when several cover the same story."""
+        from app.services.events.merge import is_near_duplicate
+
+        kept: list[Event] = []
+        for ev in events:
+            blob = f"{ev.title or ''}\n{ev.summary or ''}"
+            dup = False
+            for prev in kept:
+                prev_blob = f"{prev.title or ''}\n{prev.summary or ''}"
+                if is_near_duplicate(blob, prev_blob):
+                    # Prefer more sources when collapsing
+                    if int(ev.sources_count or 0) > int(prev.sources_count or 0):
+                        kept[kept.index(prev)] = ev
+                    dup = True
+                    break
+            if not dup:
+                kept.append(ev)
+        return kept
 
     async def prune_unread_queue(self, user: User) -> int:
         """Keep at most unread_queue_max unread items; hide weakest without marking read."""

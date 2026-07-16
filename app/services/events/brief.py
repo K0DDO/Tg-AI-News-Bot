@@ -64,7 +64,7 @@ class BriefBuilderService:
                     channel_title=src.channel_title or "Channel",
                     channel_username=src.channel_username,
                     url=src.source_url,
-                    published_at=src.created_at,
+                    published_at=getattr(src, "published_at", None) or src.created_at,
                     author=getattr(src, "author", None),
                 )
             )

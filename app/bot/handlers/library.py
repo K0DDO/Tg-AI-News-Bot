@@ -65,7 +65,9 @@ async def _render_history(
 
 
 async def show_favorites(message: Message, session: AsyncSession, db_user: User) -> None:
-    lang = await PreferencesService(session).lang(db_user)
+    prefs = PreferencesService(session)
+    lang = await prefs.lang(db_user)
+    us = await prefs.get_or_create(db_user)
     items = await FeedService(session).list_favorites(db_user)
     for n in items:
         await ensure_translation(session, n, lang)
@@ -73,7 +75,13 @@ async def show_favorites(message: Message, session: AsyncSession, db_user: User)
         await message.answer(t(lang, "empty_favorites"))
         return
     await message.answer(
-        format_feed(lang, items[:10], title_key="favorites", empty_key="empty_favorites"),
+        format_feed(
+            lang,
+            items[:10],
+            title_key="favorites",
+            empty_key="empty_favorites",
+            tz_name=us.timezone,
+        ),
         disable_web_page_preview=True,
     )
 

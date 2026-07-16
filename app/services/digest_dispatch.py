@@ -99,7 +99,13 @@ async def _send_one(session, bot: Bot, user: User, us: UserSettings) -> str | No
 
     ids = [n.id for n in items]
     has_more = len(items) < total
-    text = format_feed(lang, items, title_key="feed_title", empty_key="no_more_news")
+    text = format_feed(
+        lang,
+        items,
+        title_key="feed_title",
+        empty_key="no_more_news",
+        tz_name=us.timezone,
+    )
     kb = feed_keyboard(lang, offset=0, page_ids=ids, has_more=has_more)
     chat_id = us.digest_chat_id or user.telegram_id
 

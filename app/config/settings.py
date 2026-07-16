@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     admin_secret_key: str = "change-me"
 
     parser_poll_interval_seconds: int = 120
-    cluster_similarity_threshold: float = 0.68
+    cluster_similarity_threshold: float = 0.85
     cluster_lookback_hours: int = 48
     digest_default_limit: int = 5
     daily_digest_limit: int = 10

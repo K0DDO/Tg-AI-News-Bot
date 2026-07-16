@@ -72,7 +72,7 @@ def content_overlap(a: str, b: str) -> float:
     return len(left & right) / len(left | right)
 
 
-def is_near_duplicate(a: str, b: str, *, threshold: float = 0.34) -> bool:
+def is_near_duplicate(a: str, b: str, *, threshold: float = 0.30) -> bool:
     """True when two stories are essentially the same promo/event."""
     left = content_tokens(a)
     right = content_tokens(b)
@@ -83,8 +83,13 @@ def is_near_duplicate(a: str, b: str, *, threshold: float = 0.34) -> bool:
     if overlap >= threshold:
         return True
     # Same brand + promo wave (e.g. Rostic's + minions + combo + July)
-    if len(shared) >= 3 and overlap >= 0.24:
+    if len(shared) >= 3 and overlap >= 0.22:
         return True
+    # Strong token containment (one title is a paraphrase of the other)
+    if shared and min(len(left), len(right)) >= 3:
+        smaller = left if len(left) <= len(right) else right
+        if len(shared) / len(smaller) >= 0.72:
+            return True
     return False
 
 
@@ -121,10 +126,14 @@ class EventMergeService:
         self,
         embedding: EmbeddingPort,
         *,
-        threshold: float = 0.68,
+        threshold: float = 0.85,
         clusterer: CosineClusterer | None = None,
     ) -> None:
         self._embedding = embedding
+        # Hashing embeddings are noisier than transformers — auto-relax threshold.
+        backend = getattr(embedding, "backend", None) or embedding.__class__.__name__.lower()
+        if "hash" in str(backend).lower() and threshold > 0.55:
+            threshold = min(threshold, 0.45)
         self._threshold = threshold
         self._clusterer = clusterer or CosineClusterer()
 
@@ -203,9 +212,10 @@ class EventMergeService:
                 ent_ok = entities_overlap(entities, cand_ents)
             score = overlap * 0.65 + sim * 0.35
             near = is_near_duplicate(text, blob)
-            if near or overlap >= 0.42 or (overlap >= 0.30 and sim >= 0.52 and ent_ok) or (
-                overlap >= 0.34 and ent_ok and sim >= 0.45
-            ):
+            # Strong near-dupe bypasses entity gate (paraphrases of same story)
+            if near or overlap >= 0.42 or (overlap >= 0.28 and sim >= 0.50 and ent_ok) or (
+                overlap >= 0.32 and ent_ok and sim >= 0.40
+            ) or (sim >= 0.85 and (near or overlap >= 0.20)):
                 if score > best_score or (near and best_id is None):
                     best_score = max(score, 0.55 if near else score)
                     best_id = cand.news_id

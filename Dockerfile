@@ -21,6 +21,7 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 COPY alembic.ini .
 COPY alembic ./alembic
 COPY app ./app
+COPY locales ./locales
 COPY scripts ./scripts
 
 RUN mkdir -p /app/data/sessions /app/data/hf_cache /app/logs /app/backups \

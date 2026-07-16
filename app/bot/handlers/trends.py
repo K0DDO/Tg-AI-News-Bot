@@ -40,7 +40,7 @@ async def _trends_payload(session: AsyncSession, db_user: User) -> tuple[str, ob
     since = trends_window_start(settings)
     event_ids = await FeedService(session).event_ids_for_user(db_user)
     rows = await TrendsService(session).top_topics(limit=8, event_ids=event_ids, since=since)
-    return format_trends(lang, rows), None
+    return format_trends(lang, rows, tz_name=settings.timezone), None
 
 
 @router.message(Command("trends"))

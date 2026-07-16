@@ -13,6 +13,7 @@ def language_keyboard(*, prefix: str = "lang") -> InlineKeyboardMarkup:
         "en": "🇬🇧 English",
         "de": "🇩🇪 Deutsch",
         "es": "🇪🇸 Español",
+        "zh": "🇨🇳 中文",
     }
     rows = []
     for code in SUPPORTED_LANGS:
@@ -588,27 +589,40 @@ def min_importance_keyboard(lang: str) -> InlineKeyboardMarkup:
 
 
 def categories_keyboard(lang: str, enabled: list[str] | None) -> InlineKeyboardMarkup:
-    from app.services.categories import DEFAULT_CATEGORIES, THEME_LAYOUT_LONG, THEMES, theme_display
+    from app.services.categories import (
+        PRIMARY_THEMES,
+        SECONDARY_THEMES,
+        THEME_LAYOUT_LONG,
+        theme_display,
+    )
 
     enabled_set = set(enabled or [])
     rows: list[list[InlineKeyboardButton]] = []
-    row: list[InlineKeyboardButton] = []
-    for key in DEFAULT_CATEGORIES:
-        mark = "✓" if key in enabled_set else "□"
-        label = theme_display(key)
-        btn = InlineKeyboardButton(text=f"{mark} {label}", callback_data=f"set:cat:{key}")
-        if key in THEME_LAYOUT_LONG:
-            if row:
-                rows.append(row)
-                row = []
-            rows.append([btn])
-        else:
-            row.append(btn)
-            if len(row) == 2:
-                rows.append(row)
-                row = []
-    if row:
-        rows.append(row)
+
+    def _append_themes(keys: tuple[str, ...]) -> None:
+        row: list[InlineKeyboardButton] = []
+        for key in keys:
+            mark = "✓" if key in enabled_set else "□"
+            label = theme_display(key, lang)
+            btn = InlineKeyboardButton(text=f"{mark} {label}", callback_data=f"set:cat:{key}")
+            if key in THEME_LAYOUT_LONG:
+                if row:
+                    rows.append(row)
+                    row = []
+                rows.append([btn])
+            else:
+                row.append(btn)
+                if len(row) == 2:
+                    rows.append(row)
+                    row = []
+        if row:
+            rows.append(row)
+
+    _append_themes(PRIMARY_THEMES)
+    rows.append(
+        [InlineKeyboardButton(text=f"➕ {t(lang, 'themes_extra')}", callback_data="noop")]
+    )
+    _append_themes(SECONDARY_THEMES)
     rows.append([InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:personal")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

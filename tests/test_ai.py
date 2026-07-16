@@ -72,7 +72,7 @@ def test_groq_json_unknown_category():
             "why_important": "market move",
         }
     )
-    assert result.category == "technology"
+    assert result.category == "other"
     assert result.importance_score == 10.0
     ok = _to_analysis(
         {
@@ -83,7 +83,7 @@ def test_groq_json_unknown_category():
             "importance_score": 5,
         }
     )
-    assert ok.category == "business_finance"
+    assert ok.category == "politics"
     huge = _to_analysis(
         {
             "is_news": True,
@@ -93,7 +93,7 @@ def test_groq_json_unknown_category():
             "importance_score": 5,
         }
     )
-    assert huge.category == "technology"
+    assert huge.category == "other"
 
 
 @pytest.mark.asyncio

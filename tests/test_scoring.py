@@ -15,6 +15,8 @@ def test_summarizer_title_and_category():
         "Technology",
         "ai_software",
         "technology",
+        "tools",
+        "software",
         "other",
     }
     assert len(result.summary) > 0

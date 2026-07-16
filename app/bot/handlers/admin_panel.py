@@ -55,7 +55,7 @@ def admin_menu_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text=BTN_STATS), KeyboardButton(text=BTN_LOGS)],
             [KeyboardButton(text=BTN_GRAPH), KeyboardButton(text=BTN_AI)],
             [KeyboardButton(text=BTN_USERS), KeyboardButton(text=BTN_SYSTEM)],
-            [KeyboardButton(text=BTN_EXIT)],
+            [KeyboardButton(text=BTN_DIAG), KeyboardButton(text=BTN_EXIT)],
         ],
         resize_keyboard=True,
     )
@@ -429,10 +429,18 @@ async def admin_exit(
     db_user: User,
     state: FSMContext,
 ) -> None:
+    from app.bot.ui.nav import drop_ui_message, remember_ui_message
+    from app.bot.ui.texts import format_home
+
     await _purge_admin_messages(message, state)
     await state.clear()
-    lang = await PreferencesService(session).lang(db_user)
-    await message.answer("Вышли из админ-панели.", reply_markup=main_menu(lang))
+    prefs = PreferencesService(session)
+    lang = await prefs.lang(db_user)
+    us = await prefs.get_or_create(db_user)
+    await drop_ui_message(message.bot, session, db_user)
+    text = format_home(lang, tz_name=us.timezone)
+    sent = await message.answer(text, reply_markup=main_menu(lang))
+    await remember_ui_message(session, db_user, sent)
 
 
 @router.message(AdminAuthStates.menu, F.text == BTN_STATS)
@@ -507,19 +515,21 @@ async def admin_logs_view(
 ) -> None:
     if not await _require_admin(session, db_user, state):
         raise SkipHandler()
+    from html import escape as html_escape
+
     errors = admin_logs(limit=15, errors_only=True)
     infos = [r for r in admin_logs(limit=25) if r["level"] != "ERROR"][:15]
     lines = ["<b>📜 Логи</b>", "", "<b>Ошибки</b>"]
     if errors:
         for r in errors:
-            lines.append(f"❌ {r['ts']} {r['message']}")
+            lines.append(f"❌ {html_escape(str(r['ts']))} {html_escape(str(r['message']))}")
     else:
         lines.append("— нет")
     lines.append("")
     lines.append("<b>INFO</b>")
     if infos:
         for r in infos:
-            lines.append(f"INFO: {r['message']}")
+            lines.append(f"INFO: {html_escape(str(r['message']))}")
     else:
         lines.append("— нет")
     await _admin_answer(message, state, "\n".join(lines))
@@ -534,25 +544,52 @@ async def admin_diag(
 ) -> None:
     if not await _require_admin(session, db_user, state):
         raise SkipHandler()
+    from html import escape as html_escape
+    from sqlalchemy import func, select, text as sql_text
+
+    from app.models import Message as TgMessage
+
     snap = diagnostics_snapshot()
-    ingest = snap.get("last_ingest") or last_ingest() or {}
     redis_ok = await ping_redis()
     settings = get_settings()
+
+    db_ok = False
+    msg_count = int(snap.get("messages_total") or 0)
+    try:
+        await session.execute(sql_text("SELECT 1"))
+        db_ok = True
+        counted = await session.scalar(select(func.count()).select_from(TgMessage))
+        if counted is not None:
+            msg_count = int(counted)
+    except Exception:
+        db_ok = False
+
+    tg_ok = True
+    try:
+        await message.bot.get_me()
+    except Exception:
+        tg_ok = False
+
+    sched_ok = bool(snap.get("scheduler_running"))
     errs = snap.get("last_errors") or []
-    ai = settings.ai_provider or "—"
+    err_n = int(snap.get("errors_total") or 0)
+
     text = (
-        "<b>🧪 Диагностика</b>\n\n"
-        f"Scheduler: работает ✅\n"
-        f"Uptime: {snap.get('uptime')}\n"
-        f"Parser (последний ingest):\n"
-        f"  +{ingest.get('created_messages', '—')} msgs / "
-        f"{ingest.get('processed', '—')} processed\n"
-        f"Redis: {'✅' if redis_ok else '❌'}\n"
-        f"AI: {ai}\n\n"
+        "<b>📊 Диагностика</b>\n\n"
+        f"Bot: {'✅ Online' if tg_ok else '❌ Offline'}\n"
+        f"Database: {'✅ PostgreSQL' if db_ok else '❌ PostgreSQL'}\n"
+        f"Redis: {'✅ Connected' if redis_ok else '❌ Disconnected'}\n"
+        f"Telegram API: {'✅ Connected' if tg_ok else '❌ Error'}\n"
+        f"Scheduler: {'✅ Running' if sched_ok else '❌ Stopped'}\n\n"
+        f"Последний запуск: {html_escape(str(snap.get('last_job_ago') or '—'))}\n"
+        f"Количество сообщений: <b>{msg_count}</b>\n"
+        f"Ошибки: <b>{err_n}</b>\n"
+        f"Uptime: {html_escape(str(snap.get('uptime') or '—'))}\n"
+        f"AI: {html_escape(settings.ai_provider or '—')}\n\n"
         "<b>Последняя ошибка</b>\n"
     )
     if errs:
-        text += f"{errs[0]}"
+        text += html_escape(str(errs[0]))
     else:
         text += "нет"
     await _admin_answer(message, state, text)
@@ -690,11 +727,13 @@ async def admin_user_stats(
     def _fmt_ts(dt) -> str:
         if dt is None:
             return "—"
-        if getattr(dt, "tzinfo", None) is None:
-            from datetime import timezone as tz
+        from datetime import timezone as tz
 
+        from app.services.time_prefs import format_local
+
+        if getattr(dt, "tzinfo", None) is None:
             dt = dt.replace(tzinfo=tz.utc)
-        return dt.astimezone().strftime("%d.%m %H:%M")
+        return format_local(dt, "Europe/Moscow") or "—"
 
     _ACTION_LABELS = {
         "account_wipe_data": "🧹 Очистка данных",
@@ -1211,8 +1250,8 @@ async def admin_system_menu(
             ]
         ),
     )
-    # Also offer reply shortcuts
-    await message.answer(
+    # Also offer reply shortcuts (must be tracked for exit cleanup)
+    extra = await message.answer(
         "Дополнительно:",
         reply_markup=ReplyKeyboardMarkup(
             keyboard=[
@@ -1222,6 +1261,7 @@ async def admin_system_menu(
             resize_keyboard=True,
         ),
     )
+    await _track(state, extra)
 
 
 @router.message(AdminAuthStates.menu, F.text == "🔙 Админ-меню")

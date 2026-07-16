@@ -33,6 +33,39 @@ def parse_hhmm(value: str, fallback: str = "00:00") -> time:
         return time(hour=int(fh), minute=int(fm))
 
 
+def zone_from_name(tz_name: str | None) -> ZoneInfo:
+    name = (tz_name or "").strip() or "Europe/Moscow"
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("Europe/Moscow")
+
+
+def ensure_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def to_user_local(dt: datetime | None, tz_name: str | None = None) -> datetime | None:
+    """Convert aware/naive UTC datetime to the user's timezone."""
+    if dt is None:
+        return None
+    return ensure_utc(dt).astimezone(zone_from_name(tz_name))
+
+
+def format_local(
+    dt: datetime | None,
+    tz_name: str | None = None,
+    *,
+    fmt: str = "%d.%m %H:%M",
+) -> str:
+    local = to_user_local(dt, tz_name)
+    if local is None:
+        return ""
+    return local.strftime(fmt)
+
+
 def zone_for(settings: UserSettings | None) -> ZoneInfo:
     name = (settings.timezone if settings else None) or "Europe/Moscow"
     try:

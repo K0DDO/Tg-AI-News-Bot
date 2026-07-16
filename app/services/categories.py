@@ -10,56 +10,72 @@ import re
 from dataclasses import dataclass
 
 # Stable keys stored in DB / enabled_categories JSON
-THEME_AI_SOFTWARE = "ai_software"
+THEME_WORK = "work"
 THEME_TECHNOLOGY = "technology"
-THEME_MOBILE = "mobile"
+THEME_TOOLS = "tools"
 THEME_GAMING = "gaming"
-THEME_SCIENCE_SPACE = "science_space"
-THEME_BUSINESS = "business_finance"
-THEME_CRYPTO = "crypto"
-THEME_SPORT = "sport"
-THEME_SECURITY = "security"
-THEME_MEDIA = "media"
+THEME_SOFTWARE = "software"
+THEME_BUSINESS = "business"
+THEME_SCIENCE = "science"
 THEME_POLITICS = "politics"
 THEME_OTHER = "other"
 
+# Legacy keys kept for normalize() only
+_LEGACY_AI = "ai_software"
+_LEGACY_MOBILE = "mobile"
+_LEGACY_SCIENCE = "science_space"
+_LEGACY_BUSINESS = "business_finance"
+_LEGACY_CRYPTO = "crypto"
+_LEGACY_SPORT = "sport"
+_LEGACY_SECURITY = "security"
+_LEGACY_MEDIA = "media"
+
 ALLOWED_CATEGORIES = (
-    THEME_AI_SOFTWARE,
+    THEME_WORK,
     THEME_TECHNOLOGY,
-    THEME_MOBILE,
+    THEME_TOOLS,
     THEME_GAMING,
-    THEME_SCIENCE_SPACE,
+    THEME_SOFTWARE,
     THEME_BUSINESS,
-    THEME_CRYPTO,
-    THEME_SPORT,
-    THEME_SECURITY,
-    THEME_MEDIA,
+    THEME_SCIENCE,
     THEME_POLITICS,
     THEME_OTHER,
 )
 
-# Themes that existed before politics/other — used to auto-enable new ones
+# Main themes first; politics/other shown in a secondary block in the keyboard
+PRIMARY_THEMES = (
+    THEME_WORK,
+    THEME_TECHNOLOGY,
+    THEME_TOOLS,
+    THEME_GAMING,
+    THEME_SOFTWARE,
+    THEME_BUSINESS,
+    THEME_SCIENCE,
+)
+SECONDARY_THEMES = (THEME_POLITICS, THEME_OTHER)
+
+# Themes that existed before the product refresh — used to auto-enable new ones
 _LEGACY_FULL_THEMES = frozenset(
     {
-        THEME_AI_SOFTWARE,
+        _LEGACY_AI,
         THEME_TECHNOLOGY,
-        THEME_MOBILE,
+        _LEGACY_MOBILE,
         THEME_GAMING,
-        THEME_SCIENCE_SPACE,
-        THEME_BUSINESS,
-        THEME_CRYPTO,
-        THEME_SPORT,
-        THEME_SECURITY,
-        THEME_MEDIA,
+        _LEGACY_SCIENCE,
+        _LEGACY_BUSINESS,
+        _LEGACY_CRYPTO,
+        _LEGACY_SPORT,
+        _LEGACY_SECURITY,
+        _LEGACY_MEDIA,
+        THEME_POLITICS,
+        THEME_OTHER,
     }
 )
 
 DEFAULT_CATEGORIES = list(ALLOWED_CATEGORIES)
 
-# Short themes → 2 per keyboard row; long → 1 per row
-THEME_LAYOUT_LONG = frozenset(
-    {THEME_AI_SOFTWARE, THEME_SCIENCE_SPACE, THEME_BUSINESS, THEME_POLITICS}
-)
+# Long labels → 1 per keyboard row
+THEME_LAYOUT_LONG = frozenset({THEME_TECHNOLOGY, THEME_BUSINESS, THEME_SOFTWARE})
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,49 +90,73 @@ class ThemeMeta:
 
 
 THEMES: dict[str, ThemeMeta] = {
-    THEME_AI_SOFTWARE: ThemeMeta(THEME_AI_SOFTWARE, "🤖", "AI & Software"),
-    THEME_TECHNOLOGY: ThemeMeta(THEME_TECHNOLOGY, "💻", "Technology"),
-    THEME_MOBILE: ThemeMeta(THEME_MOBILE, "📱", "Mobile"),
-    THEME_GAMING: ThemeMeta(THEME_GAMING, "🎮", "Gaming"),
-    THEME_SCIENCE_SPACE: ThemeMeta(THEME_SCIENCE_SPACE, "🔬", "Science & Space"),
-    THEME_BUSINESS: ThemeMeta(THEME_BUSINESS, "💰", "Business & Finance"),
-    THEME_CRYPTO: ThemeMeta(THEME_CRYPTO, "₿", "Crypto"),
-    THEME_SPORT: ThemeMeta(THEME_SPORT, "🏆", "Sport"),
-    THEME_SECURITY: ThemeMeta(THEME_SECURITY, "🔐", "Security"),
-    THEME_MEDIA: ThemeMeta(THEME_MEDIA, "🎬", "Media"),
-    THEME_POLITICS: ThemeMeta(THEME_POLITICS, "🏛", "Politics"),
-    THEME_OTHER: ThemeMeta(THEME_OTHER, "📦", "Other"),
+    THEME_WORK: ThemeMeta(THEME_WORK, "💼", "Работа"),
+    THEME_TECHNOLOGY: ThemeMeta(THEME_TECHNOLOGY, "💻", "Технологии"),
+    THEME_TOOLS: ThemeMeta(THEME_TOOLS, "🛠", "Инструменты"),
+    THEME_GAMING: ThemeMeta(THEME_GAMING, "🎮", "Игры"),
+    THEME_SOFTWARE: ThemeMeta(THEME_SOFTWARE, "📱", "Софт"),
+    THEME_BUSINESS: ThemeMeta(THEME_BUSINESS, "📈", "Бизнес"),
+    THEME_SCIENCE: ThemeMeta(THEME_SCIENCE, "🔬", "Наука"),
+    THEME_POLITICS: ThemeMeta(THEME_POLITICS, "🏛", "Политика"),
+    THEME_OTHER: ThemeMeta(THEME_OTHER, "🎨", "Разное"),
 }
 
 # Legacy → new theme keys
 LEGACY_THEME_MAP: dict[str, str] = {
-    "AI": THEME_AI_SOFTWARE,
-    "Software": THEME_AI_SOFTWARE,
+    "AI": THEME_SOFTWARE,
+    "Software": THEME_SOFTWARE,
     "Technology": THEME_TECHNOLOGY,
     "Hardware": THEME_TECHNOLOGY,
-    "Science": THEME_SCIENCE_SPACE,
+    "Science": THEME_SCIENCE,
     "Business": THEME_BUSINESS,
-    "Crypto": THEME_CRYPTO,
-    "Sports": THEME_SPORT,
-    "Sport": THEME_SPORT,
-    "Security": THEME_SECURITY,
+    "Crypto": THEME_BUSINESS,
+    "Sports": THEME_OTHER,
+    "Sport": THEME_OTHER,
+    "Security": THEME_TECHNOLOGY,
     "Gaming": THEME_GAMING,
-    "Entertainment": THEME_MEDIA,
+    "Entertainment": THEME_OTHER,
     "Politics": THEME_POLITICS,
-    "Health": THEME_SCIENCE_SPACE,
+    "Health": THEME_SCIENCE,
     "Other": THEME_OTHER,
     "General": THEME_OTHER,
+    "Work": THEME_WORK,
+    "Tools": THEME_TOOLS,
+    "Mobile": THEME_SOFTWARE,
+    _LEGACY_AI: THEME_SOFTWARE,
+    _LEGACY_MOBILE: THEME_SOFTWARE,
+    _LEGACY_SCIENCE: THEME_SCIENCE,
+    _LEGACY_BUSINESS: THEME_BUSINESS,
+    _LEGACY_CRYPTO: THEME_BUSINESS,
+    _LEGACY_SPORT: THEME_OTHER,
+    _LEGACY_SECURITY: THEME_TECHNOLOGY,
+    _LEGACY_MEDIA: THEME_OTHER,
+    "ai_software": THEME_SOFTWARE,
+    "mobile": THEME_SOFTWARE,
+    "science_space": THEME_SCIENCE,
+    "business_finance": THEME_BUSINESS,
+    "crypto": THEME_BUSINESS,
+    "sport": THEME_OTHER,
+    "security": THEME_TECHNOLOGY,
+    "media": THEME_OTHER,
 }
 
 CATEGORY_ALIASES = {
     **LEGACY_THEME_MAP,
     "Tech": THEME_TECHNOLOGY,
-    "ИИ": THEME_AI_SOFTWARE,
+    "ИИ": THEME_SOFTWARE,
     "Политика": THEME_POLITICS,
     "Politics & Society": THEME_POLITICS,
     "Другое": THEME_OTHER,
+    "Разное": THEME_OTHER,
     "Misc": THEME_OTHER,
     "Unknown": THEME_OTHER,
+    "Работа": THEME_WORK,
+    "Инструменты": THEME_TOOLS,
+    "Софт": THEME_SOFTWARE,
+    "Бизнес": THEME_BUSINESS,
+    "Наука": THEME_SCIENCE,
+    "Игры": THEME_GAMING,
+    "Технологии": THEME_TECHNOLOGY,
 }
 
 # Channel promo footers must not drive theme.
@@ -141,30 +181,12 @@ def _clean_blob(text: str) -> str:
 _CATEGORY_RULES: list[tuple[re.Pattern[str], str]] = [
     (
         re.compile(
-            r"(?<![a-zа-я])(bitcoin|ethereum|crypto|крипто\w*|блокчейн\w*|blockchain|"
-            r"nft|binance|usdt|solana)",
+            r"(?<![a-zа-я])(ваканси\w*|удалёнк\w*|удаленк\w*|релокац\w*|зарплат\w*|"
+            r"job\s*offer|hiring|карьера\w*|собеседован\w*|hr\b|резюме\b|"
+            r"work\s*from\s*home|remote\s*work|layoff\w*|увольнен\w*)",
             re.I,
         ),
-        THEME_CRYPTO,
-    ),
-    (
-        re.compile(
-            r"(?<![a-zа-я])(chatgpt|openai|anthropic|claude|gemini|deepseek|llm|gpt-?\d|"
-            r"нейросет\w*|machine\s*learning|генеративн\w*|artificial\s*intelligence|"
-            r"ai(?![a-zа-я])|ии(?![а-я])|утилита\w*|software|saas|macos|windows|linux|"
-            r"github|gitlab|vscode|cursor\b|программирован\w*|kubernetes|docker|"
-            r"сторонн\w*\s+приложение|приложение\s+(для|камер|управлен))",
-            re.I,
-        ),
-        THEME_AI_SOFTWARE,
-    ),
-    (
-        re.compile(
-            r"(?<![a-zа-я])(кибербезопасност\w*|взлом\w*|уязвим\w*|хакер\w*|ransomware|"
-            r"phishing|malware|cve-|data\s*breach|утечк[аи]\s+данн\w*|vpn\b)",
-            re.I,
-        ),
-        THEME_SECURITY,
+        THEME_WORK,
     ),
     (
         re.compile(
@@ -174,42 +196,6 @@ _CATEGORY_RULES: list[tuple[re.Pattern[str], str]] = [
             re.I,
         ),
         THEME_GAMING,
-    ),
-    (
-        re.compile(
-            r"(?<![a-zа-я])(iphone|ipad|pixel|galaxy|samsung|xiaomi|huawei|oneplus|"
-            r"fold|flip|smartphone|смартфон\w*|планшет\w*|tablet|airpods|android|ios\b|"
-            r"wearable|обновл[её]нн\w*\s+дизайн)",
-            re.I,
-        ),
-        THEME_MOBILE,
-    ),
-    (
-        re.compile(
-            r"(?<![a-zа-я])(film|movie|сериал\w*|кино\b|netflix|disney|marvel|фильм\w*|"
-            r"музык\w*|concert\w*|celebrity|акт[её]р\w*|режисс[её]р\w*|трейлер\w*|album\b|"
-            r"медиа|media\b)",
-            re.I,
-        ),
-        THEME_MEDIA,
-    ),
-    (
-        re.compile(
-            r"(?<![a-zа-я])(sport\w*|спорт\w*|футбол\w*|hockey|хоккей|olympic\w*|nba|fifa|"
-            r"чемпионат\w*|матч\w*|tennis|теннис)",
-            re.I,
-        ),
-        THEME_SPORT,
-    ),
-    (
-        re.compile(
-            r"(?<![a-zа-я])(space|космос\w*|nasa|spacex|rocket|спутник\w*|марс\b|"
-            r"astronomy|телескоп\w*|science|наук\w*|исследован\w*|research|"
-            r"физик\w*|хими\w*|биолог\w*|климат\w*|атомн\w*\s+реактор|"
-            r"health|здоров\w*|медицин\w*|vaccine|вакцин\w*)",
-            re.I,
-        ),
-        THEME_SCIENCE_SPACE,
     ),
     (
         re.compile(
@@ -224,26 +210,69 @@ _CATEGORY_RULES: list[tuple[re.Pattern[str], str]] = [
     ),
     (
         re.compile(
-            r"(?<![a-zа-я])(startup\w*|funding|инвестиц\w*|ipo\b|акци[яи]|выручк\w*|"
-            r"revenue|экономик\w*|банк\w*|финтех\w*|layoff\w*|увольнен\w*)",
+            r"(?<![a-zа-я])(chatgpt|openai|anthropic|claude|gemini|deepseek|llm|gpt-?\d|"
+            r"нейросет\w*|machine\s*learning|генеративн\w*|artificial\s*intelligence|"
+            r"ai(?![a-zа-я])|ии(?![а-я])|vscode|cursor\b|github|gitlab|"
+            r"утилита\w*|cli\b|плагин\w*|plugin\w*|extension\w*|инструмент\w*|"
+            r"devtools|jetbrains|figma)",
             re.I,
         ),
-        THEME_BUSINESS,
+        THEME_TOOLS,
     ),
     (
         re.compile(
-            r"(?<![a-zа-я])(nvidia|amd\b|intel|gpu|cpu|чип\w*|macbook|gadget|гаджет\w*|"
-            r"hardware|technology|технолог\w*|laptop|ноутбук)",
+            r"(?<![a-zа-я])(iphone|ipad|pixel|galaxy|samsung|xiaomi|huawei|oneplus|"
+            r"fold|flip|smartphone|смартфон\w*|планшет\w*|tablet|airpods|android|ios\b|"
+            r"wearable|приложение\w*|app\s*store|google\s*play|saas|macos|windows|linux|"
+            r"сторонн\w*\s+приложение|software|софт\b)",
+            re.I,
+        ),
+        THEME_SOFTWARE,
+    ),
+    (
+        re.compile(
+            r"(?<![a-zа-я])(кибербезопасност\w*|взлом\w*|уязвим\w*|хакер\w*|ransomware|"
+            r"phishing|malware|cve-|data\s*breach|утечк[аи]\s+данн\w*|vpn\b|"
+            r"nvidia|amd\b|intel|gpu|cpu|чип\w*|macbook|gadget|гаджет\w*|"
+            r"hardware|technology|технолог\w*|laptop|ноутбук|kubernetes|docker)",
             re.I,
         ),
         THEME_TECHNOLOGY,
     ),
+    (
+        re.compile(
+            r"(?<![a-zа-я])(space|космос\w*|nasa|spacex|rocket|спутник\w*|марс\b|"
+            r"astronomy|телескоп\w*|science|наук\w*|исследован\w*|research|"
+            r"физик\w*|хими\w*|биолог\w*|климат\w*|атомн\w*\s+реактор|"
+            r"health|здоров\w*|медицин\w*|vaccine|вакцин\w*)",
+            re.I,
+        ),
+        THEME_SCIENCE,
+    ),
+    (
+        re.compile(
+            r"(?<![a-zа-я])(startup\w*|funding|инвестиц\w*|ipo\b|акци[яи]|выручк\w*|"
+            r"revenue|экономик\w*|банк\w*|финтех\w*|bitcoin|ethereum|crypto|"
+            r"крипто\w*|блокчейн\w*|blockchain|nft|binance)",
+            re.I,
+        ),
+        THEME_BUSINESS,
+    ),
 ]
 
 
-def theme_display(key: str | None) -> str:
-    meta = THEMES.get(key or "")
+def theme_display(key: str | None, lang: str | None = None) -> str:
+    meta = THEMES.get(normalize_category(key) if key else THEME_OTHER)
     if meta:
+        if lang and lang != "ru":
+            try:
+                from app.bot.i18n import t
+
+                label = t(lang, f"theme_{meta.key}")
+                if label and label != f"theme_{meta.key}":
+                    return f"{meta.emoji} {label}"
+            except Exception:
+                pass
         return meta.display
     return key or THEME_OTHER
 
@@ -259,7 +288,6 @@ def normalize_category(raw: str | None) -> str:
     lower = {c.lower(): c for c in ALLOWED_CATEGORIES}
     if value.lower() in lower:
         return lower[value.lower()]
-    # Title-case legacy like "Technology"
     if value in LEGACY_THEME_MAP:
         return LEGACY_THEME_MAP[value]
     return THEME_OTHER
@@ -288,7 +316,6 @@ def classify_event_text(
         if guessed and guessed != THEME_OTHER:
             return guessed
         if guessed == THEME_OTHER and blob.strip():
-            # Keep scanning richer blobs; only fall through if all miss
             continue
     if current:
         return normalize_category(current)
@@ -310,9 +337,9 @@ def migrate_enabled_list(raw: list | None) -> list[str]:
         if key in ALLOWED_CATEGORIES and key not in seen:
             seen.add(key)
             out.append(key)
-    # Users who had the full pre-politics set get the new themes auto-enabled
-    if _LEGACY_FULL_THEMES <= set(out):
-        for key in (THEME_POLITICS, THEME_OTHER):
+    # Users who had a full legacy set get new primary themes auto-enabled
+    if len(seen) >= 8:
+        for key in ALLOWED_CATEGORIES:
             if key not in seen:
                 seen.add(key)
                 out.append(key)

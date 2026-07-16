@@ -112,6 +112,7 @@ async def _run_search(
         external_count=0 if include_external else result.external_count,
         related_questions=result.related_questions,
         matched_nodes=result.matched_nodes,
+        tz_name=us.timezone,
     )
     if deep:
         text = f"🔬 <b>{t(lang, 'deep_search')}</b>\n\n" + text

@@ -93,13 +93,16 @@ keywords (array of short search keywords from THIS post),
 importance_score (number 0-10),
 why_important (string, short reasons separated by "; "),
 reasoning (string, brief why this score),
-language (string: ru|en|de|es|other),
+language (string: ru|en|de|es|zh|other),
 reason (string|null — only when is_news=false).
 
 CRITICAL fidelity rules for title/summary/topic:
 - Use ONLY facts explicitly present in the message text.
 - NEVER invent connections between unrelated franchises, films, games, or brands.
 - Prefer short, precise summary over creative rewriting.
+- Title must name the core event once (no clickbait, no duplicate variants).
+- Keep important details (who/what/where) when present in the post.
+- If the post is a paraphrase of a known event (same product/action), keep a stable canonical title.
 is_advertisement=true for promo codes, subscribe CTAs, sales spam.
 is_news=false for ads, chatter, non-news.
 """
@@ -111,9 +114,10 @@ Rules:
 2) Decide which events are truly relevant to the query entities/topic.
 3) Reject ads, off-topic, and random brands that do not match the query.
 4) NEVER merge unrelated events into one story.
-5) If NONE are relevant, return JSON:
+5) If several snippets describe the SAME event, treat them as one story and mention multiple sources.
+6) If NONE are relevant, return JSON:
 {"relevant": false, "answer": "По вашему запросу релевантных новостей найдено не было.", "used_ids": []}
-6) If some are relevant, return JSON:
+7) If some are relevant, return JSON:
 {"relevant": true, "answer": "2-6 sentences answering the query using only those events", "used_ids": [ids...]}
 Answer language: match the user query language.
 """
@@ -123,6 +127,7 @@ LANG_NAMES = {
     "en": "English",
     "de": "German",
     "es": "Spanish",
+    "zh": "Chinese",
 }
 
 
@@ -263,11 +268,19 @@ def to_analysis(data: dict[str, Any]) -> PostAnalysisResult:
     reason = data.get("reason")
     is_ad = bool(data.get("is_advertisement", False))
     is_news = bool(data.get("is_news", False)) and not is_ad
+    title = str(data.get("title") or "").strip()[:512]
+    summary = str(data.get("summary") or "").strip()
+    # Quality gate: empty / too short title → mark weak for heuristic fallback upstream
+    if len(title) < 8:
+        title = title or "Без заголовка"
+        if is_news and not summary:
+            is_news = False
+            reason = reason or "low_quality_ai"
     return PostAnalysisResult(
         is_news=is_news,
         is_advertisement=is_ad,
-        title=str(data.get("title") or "").strip()[:512] or "Без заголовка",
-        summary=str(data.get("summary") or "").strip(),
+        title=title or "Без заголовка",
+        summary=summary,
         category=category,
         topic=topic,
         entities=entities,

@@ -112,7 +112,7 @@ async def open_feed(
     elif not items:
         text = t(lang, "no_more_news")
     else:
-        text = format_feed(lang, items)
+        text = format_feed(lang, items, tz_name=us.timezone)
     ids = [n.id for n in items]
     has_more = offset + len(items) < total and bool(items)
     kb = feed_keyboard(lang, offset=offset, page_ids=ids, has_more=has_more)
@@ -261,6 +261,7 @@ async def _show_detail(
             total=len(ids),
             show_summary=us.show_summary,
             related=related,
+            tz_name=us.timezone,
         ),
         reply_markup=detail_keyboard(
             lang, offset=offset, index=index, total=len(ids), news_id=news.id, ids_s=ids_s
@@ -311,7 +312,12 @@ async def feed_down(callback: CallbackQuery, session: AsyncSession, db_user: Use
     brief = _briefs.build(n2, lang=news_lang, show_summary=us.show_summary)
     await callback.message.edit_text(
         format_news_detail(
-            lang, brief, index=new_index + 1, total=len(remaining), show_summary=us.show_summary
+            lang,
+            brief,
+            index=new_index + 1,
+            total=len(remaining),
+            show_summary=us.show_summary,
+            tz_name=us.timezone,
         ),
         reply_markup=detail_keyboard(
             lang, offset=offset, index=new_index, total=len(remaining), news_id=n2.id, ids_s=ids_s2
@@ -342,8 +348,9 @@ async def feed_sources(callback: CallbackQuery, session: AsyncSession, db_user: 
         return
     brief = _briefs.build(news, lang=lang)
     pairs = [(s.channel_title or "Source", s.url) for s in brief.sources if s.url]
+    us = await PreferencesService(session).get_or_create(db_user)
     await callback.message.answer(
-        format_sources_screen(lang, brief),
+        format_sources_screen(lang, brief, tz_name=us.timezone),
         reply_markup=sources_keyboard(pairs, lang),
         disable_web_page_preview=True,
     )

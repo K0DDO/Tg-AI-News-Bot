@@ -226,6 +226,7 @@ class EventPipeline:
                 source_url=message.url,
                 channel_title=channel_title,
                 channel_username=channel_username,
+                published_at=message.published_at,
             )
         )
         message.status = MessageStatus.PROCESSED.value
@@ -257,6 +258,7 @@ class EventPipeline:
                 source_url=message.url,
                 channel_title=channel_title,
                 channel_username=channel_username,
+                published_at=message.published_at,
             )
         )
         message.status = MessageStatus.PROCESSED.value

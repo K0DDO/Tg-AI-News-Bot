@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.brand import send_banner
 from app.bot.i18n import (
     LANG_LABELS,
+    SUPPORTED_LANGS,
     btn_feed,
     btn_search,
     btn_settings,
@@ -461,14 +462,14 @@ async def nav_search(
 
 
 # Reply keyboard routing
-@router.message(F.text.func(lambda s: bool(s) and any(s == btn_feed(l) for l in ("ru", "en", "de", "es"))))
+@router.message(F.text.func(lambda s: bool(s) and any(s == btn_feed(l) for l in SUPPORTED_LANGS)))
 async def reply_feed(message: Message, session: AsyncSession, db_user: User) -> None:
     from app.bot.handlers.news import open_feed
 
     await open_feed(message, session, db_user)
 
 
-@router.message(F.text.func(lambda s: bool(s) and any(s == btn_search(l) for l in ("ru", "en", "de", "es"))))
+@router.message(F.text.func(lambda s: bool(s) and any(s == btn_search(l) for l in SUPPORTED_LANGS)))
 async def reply_search(message: Message, session: AsyncSession, db_user: User, state: FSMContext) -> None:
     from app.bot.handlers.search import ask_search
     from app.bot.states import SearchStates
@@ -477,14 +478,14 @@ async def reply_search(message: Message, session: AsyncSession, db_user: User, s
     await ask_search(message, session, db_user)
 
 
-@router.message(F.text.func(lambda s: bool(s) and any(s == btn_settings(l) for l in ("ru", "en", "de", "es"))))
+@router.message(F.text.func(lambda s: bool(s) and any(s == btn_settings(l) for l in SUPPORTED_LANGS)))
 async def reply_settings(message: Message, session: AsyncSession, db_user: User) -> None:
     from app.bot.handlers.settings import open_settings
 
     await open_settings(message, session, db_user)
 
 
-@router.message(F.text.func(lambda s: bool(s) and any(s == btn_trends(l) for l in ("ru", "en", "de", "es"))))
+@router.message(F.text.func(lambda s: bool(s) and any(s == btn_trends(l) for l in SUPPORTED_LANGS)))
 async def reply_trends(message: Message, session: AsyncSession, db_user: User) -> None:
     from app.bot.handlers.trends import show_trends_msg
 

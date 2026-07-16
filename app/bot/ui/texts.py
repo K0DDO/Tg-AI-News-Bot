@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from app.bot.i18n import t
 from app.models import Event
@@ -37,14 +37,16 @@ def format_meta_line(
     sources: int,
     posts: int,
     first_seen: datetime | None = None,
+    tz_name: str | None = None,
 ) -> str:
     cat_label = theme_display(normalize_category(category))
     line = f"⭐️ {score:.1f}/10 • 📂 {escape(cat_label)} • 📡 {sources} • 📰 {posts}"
     if first_seen is not None:
-        ts = first_seen
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-        line += f" • 🗓 {ts.strftime('%d.%m')}"
+        from app.services.time_prefs import format_local
+
+        date = format_local(first_seen, tz_name, fmt="%d.%m")
+        if date:
+            line += f" • 🗓 {date}"
     return line
 
 
@@ -64,18 +66,9 @@ def format_home(
     saved: int = 0,
     liked: int = 0,
 ) -> str:
-    if last_update is None:
-        updated = "—"
-    else:
-        if last_update.tzinfo is None:
-            last_update = last_update.replace(tzinfo=timezone.utc)
-        try:
-            from zoneinfo import ZoneInfo
+    from app.services.time_prefs import format_local
 
-            zone = ZoneInfo(tz_name or "Europe/Moscow")
-        except Exception:
-            zone = timezone.utc
-        updated = last_update.astimezone(zone).strftime("%d.%m %H:%M")
+    updated = format_local(last_update, tz_name) or "—"
     lines = [
         f"<b>🍓 {t(lang, 'brand')}</b>",
         "",
@@ -97,6 +90,7 @@ def format_feed(
     title_key: str = "feed_title",
     empty_key: str = "no_more_news",
     empty_plain: str | None = None,
+    tz_name: str | None = None,
 ) -> str:
     if not items:
         if empty_plain:
@@ -119,6 +113,7 @@ def format_feed(
                 sources=brief.sources_count,
                 posts=brief.posts_count,
                 first_seen=brief.first_seen,
+                tz_name=tz_name,
             )
         )
         lines.append("")
@@ -133,6 +128,7 @@ def format_news_detail(
     total: int,
     show_summary: bool = True,
     related: list[Event] | None = None,
+    tz_name: str | None = None,
 ) -> str:
     brief = news if isinstance(news, Brief) else to_brief(news, lang, show_summary=show_summary)
     lines = [
@@ -151,6 +147,7 @@ def format_news_detail(
             sources=brief.sources_count,
             posts=brief.posts_count,
             first_seen=brief.first_seen,
+            tz_name=tz_name,
         )
     )
     if brief.topic:
@@ -196,7 +193,14 @@ def format_timeline(lang: str, news: Event | Brief) -> str:
     return "\n".join(lines).rstrip("─\n")
 
 
-def format_sources_screen(lang: str, news: Event | Brief) -> str:
+def format_sources_screen(
+    lang: str,
+    news: Event | Brief,
+    *,
+    tz_name: str | None = None,
+) -> str:
+    from app.services.time_prefs import format_local
+
     brief = news if isinstance(news, Brief) else to_brief(news, lang)
     lines = [f"📡 <b>{t(lang, 'sources')}</b>", f"<i>{escape(brief.title)}</i>", ""]
     if not brief.sources:
@@ -205,7 +209,7 @@ def format_sources_screen(lang: str, news: Event | Brief) -> str:
     for i, src in enumerate(brief.sources, start=1):
         title = escape(src.channel_title or "Channel")
         uname = f" @{src.channel_username}" if src.channel_username else ""
-        date = src.published_at.strftime("%d.%m.%Y") if src.published_at else ""
+        date = format_local(src.published_at, tz_name, fmt="%d.%m.%Y %H:%M")
         author = escape(src.author) if src.author else "—"
         lines.append(f"{circled(i)} 📰 {title}{uname}")
         if date:
@@ -224,7 +228,10 @@ def format_search_answer(
     external_count: int = 0,
     related_questions: list[str] | None = None,
     matched_nodes: list[str] | None = None,
+    tz_name: str | None = None,
 ) -> str:
+    from app.services.time_prefs import format_local
+
     if not news_items:
         empty = (answer or "").strip() or t(lang, "search_empty")
         return (
@@ -246,9 +253,7 @@ def format_search_answer(
         brief = to_brief(event, lang)
         src = brief.sources[0] if brief.sources else None
         channel = escape(src.channel_title if src else (brief.topic or "—"))
-        date = ""
-        if src and src.published_at:
-            date = src.published_at.strftime("%d.%m.%Y")
+        date = format_local(src.published_at, tz_name, fmt="%d.%m.%Y") if src else ""
         url = src.url if src else ""
         lines.append(f"{circled(i)} <b>{escape(brief.title)}</b>")
         lines.append(
@@ -257,6 +262,7 @@ def format_search_answer(
                 category=brief.category,
                 sources=brief.sources_count,
                 posts=brief.posts_count,
+                tz_name=tz_name,
             )
         )
         lines.append(f"   📰 {channel}" + (f" · {date}" if date else ""))
@@ -316,7 +322,7 @@ def format_history_list(
     return "\n".join(lines).rstrip()
 
 
-def format_trends(lang: str, rows: list[dict]) -> str:
+def format_trends(lang: str, rows: list[dict], *, tz_name: str | None = None) -> str:
     if not rows:
         return f"<b>🔥 {t(lang, 'trends')}</b>\n\n{t(lang, 'trends_empty')}"
     lines = [f"<b>🔥 {t(lang, 'trends')}</b>", ""]
@@ -333,6 +339,7 @@ def format_trends(lang: str, rows: list[dict]) -> str:
                 sources=int(row.get("sources") or 0),
                 posts=int(row.get("posts_count", row.get("news_count", 0)) or 0),
                 first_seen=first_seen if isinstance(first_seen, datetime) else None,
+                tz_name=tz_name,
             )
         )
         lines.append("")
@@ -444,19 +451,7 @@ def format_about(lang: str) -> str:
 
 
 def format_privacy(lang: str) -> str:
-    if lang == "en":
-        return (
-            "<b>🔒 Privacy policy</b>\n\n"
-            "We store: Telegram ID, channels, reactions, reading history, settings.\n"
-            "Used only to personalize your feed. Not sold to third parties.\n"
-            "Reset reactions in Settings; full deletion on request."
-        )
-    return (
-        "<b>🔒 Политика конфиденциальности</b>\n\n"
-        "Храним: Telegram ID, каналы, реакции, историю просмотров, настройки.\n"
-        "Только для персональной ленты. Не продаём третьим лицам.\n"
-        "Сброс реакций — в настройках; полное удаление — по запросу."
-    )
+    return f"<b>🔒 {t(lang, 'privacy')}</b>\n\n{t(lang, 'privacy_body')}"
 
 
 def onboarding_steps(lang: str) -> list[tuple[str, str]]:

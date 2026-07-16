@@ -18,6 +18,8 @@ _TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
 class HashingEmbedding:
     """Fast bag-of-tokens hashing trick — no model download. Good for tests/MVP fallback."""
 
+    backend = "hashing"
+
     def __init__(self, dim: int = 384) -> None:
         self.dim = dim
 
@@ -42,6 +44,8 @@ class HashingEmbedding:
 
 class SentenceTransformerEmbedding:
     """Lazy sentence-transformers wrapper (implements EmbeddingPort)."""
+
+    backend = "sentence_transformers"
 
     def __init__(self, model_name: str) -> None:
         self._model_name = model_name
