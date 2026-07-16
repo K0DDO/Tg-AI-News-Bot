@@ -119,6 +119,41 @@ _STRINGS: dict[str, dict[str, str]] = {
         "set_cats": "Категории",
         "set_ignore": "Игнор тем",
         "set_reset": "Сброс реакций",
+        "del_account": "Удалить аккаунт",
+        "del_acc_title": "Удаление аккаунта",
+        "del_acc_intro": (
+            "Это действие необратимо для выбранных данных.\n\n"
+            "Выберите, что удалить:"
+        ),
+        "del_acc_data": "Только данные",
+        "del_acc_data_hint": (
+            "История, избранное, реакции и настройки.\n"
+            "Каналы останутся — лента продолжит работать."
+        ),
+        "del_acc_channels": "Данные + отвязать каналы",
+        "del_acc_channels_hint": (
+            "Всё как выше, плюс список ваших каналов отвязывается.\n"
+            "Записи каналов в базе остаются."
+        ),
+        "del_acc_purge": "Данные + удалить каналы из базы",
+        "del_acc_purge_hint": (
+            "Каналы удаляются из базы, если ими больше никто не пользуется.\n"
+            "Общие с другими пользователями — сохраняются."
+        ),
+        "del_acc_confirm_title": "Подтверждение",
+        "del_acc_confirm_body": (
+            "Чтобы продолжить, напишите в чат одно из слов:\n\n"
+            "<b>удалить</b>  или  <b>да</b>\n\n"
+            "Любой другой текст отменит удаление."
+        ),
+        "del_acc_cancel": "Отмена",
+        "del_acc_cancelled": "Удаление отменено.",
+        "del_acc_done_data": "Данные аккаунта очищены. Можно начать заново.",
+        "del_acc_done_full": "Аккаунт очищен, каналы отвязаны. Можно начать заново.",
+        "del_acc_done_purge": (
+            "Аккаунт очищен. Уникальные каналы удалены из базы "
+            "(общие с другими пользователями сохранены)."
+        ),
         "channels_hint": "Пришлите список @username или ссылок — по одному в строке.",
         "ch_add": "Добавить",
         "ch_list": "Мои каналы",
@@ -376,6 +411,41 @@ _STRINGS: dict[str, dict[str, str]] = {
         "set_cats": "Categories",
         "set_ignore": "Ignore topics",
         "set_reset": "Reset reactions",
+        "del_account": "Delete account",
+        "del_acc_title": "Delete account",
+        "del_acc_intro": (
+            "This cannot be undone for the selected data.\n\n"
+            "Choose what to delete:"
+        ),
+        "del_acc_data": "Data only",
+        "del_acc_data_hint": (
+            "History, favorites, reactions and settings.\n"
+            "Your channels stay — the feed keeps working."
+        ),
+        "del_acc_channels": "Data + unlink channels",
+        "del_acc_channels_hint": (
+            "Everything above, plus your channel list is unlinked.\n"
+            "Channel records stay in the database."
+        ),
+        "del_acc_purge": "Data + delete channels from DB",
+        "del_acc_purge_hint": (
+            "Channels are removed from the database only if nobody else follows them.\n"
+            "Channels shared with other users are kept."
+        ),
+        "del_acc_confirm_title": "Confirmation",
+        "del_acc_confirm_body": (
+            "To continue, type one of these words in the chat:\n\n"
+            "<b>delete</b>  or  <b>yes</b>\n\n"
+            "Any other text cancels deletion."
+        ),
+        "del_acc_cancel": "Cancel",
+        "del_acc_cancelled": "Deletion cancelled.",
+        "del_acc_done_data": "Account data cleared. You can start over.",
+        "del_acc_done_full": "Account cleared and channels unlinked. You can start over.",
+        "del_acc_done_purge": (
+            "Account cleared. Unique channels removed from the database "
+            "(shared with other users were kept)."
+        ),
         "channels_hint": "Send @usernames or links — one per line.",
         "ch_add": "Add",
         "ch_list": "My channels",

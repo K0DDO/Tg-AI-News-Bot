@@ -415,7 +415,42 @@ def settings_info_keyboard(lang: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=f"📖 {t(lang, 'how_to_use')}", callback_data="nav:howto")],
             [InlineKeyboardButton(text=f"🔒 {t(lang, 'privacy')}", callback_data="set:privacy")],
             [InlineKeyboardButton(text=f"ℹ️ {t(lang, 'about')}", callback_data="set:about")],
+            [InlineKeyboardButton(text=f"🗑 {t(lang, 'del_account')}", callback_data="set:delacc")],
             [InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:back")],
+        ]
+    )
+
+
+def account_delete_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"📄 {t(lang, 'del_acc_data')}",
+                    callback_data="set:delacc:data",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"📡 {t(lang, 'del_acc_channels')}",
+                    callback_data="set:delacc:full",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"🗄 {t(lang, 'del_acc_purge')}",
+                    callback_data="set:delacc:purge",
+                )
+            ],
+            [InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:info")],
+        ]
+    )
+
+
+def account_delete_confirm_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"❌ {t(lang, 'del_acc_cancel')}", callback_data="set:delacc:cancel")],
         ]
     )
 

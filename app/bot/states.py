@@ -36,3 +36,9 @@ class AdminAuthStates(StatesGroup):
 
 class TimezoneStates(StatesGroup):
     waiting_tz = State()
+
+
+class DeleteAccountStates(StatesGroup):
+    """Type confirmation phrase before wiping account data."""
+
+    waiting_confirm = State()

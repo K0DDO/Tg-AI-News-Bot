@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.i18n import t
 from app.bot.keyboards import (
+    account_delete_confirm_keyboard,
+    account_delete_keyboard,
     backfill_period_keyboard,
     backfill_progress_keyboard,
     categories_keyboard,
@@ -31,7 +33,7 @@ from app.bot.keyboards import (
     theme_weights_keyboard,
     timezone_keyboard,
 )
-from app.bot.states import IgnoreTopicsStates, TimezoneStates
+from app.bot.states import DeleteAccountStates, IgnoreTopicsStates, TimezoneStates
 from app.bot.ui import format_backfill_progress, format_privacy, format_settings
 from app.models import User
 from app.services.preferences import PreferencesService
@@ -409,6 +411,135 @@ async def set_info_sec(callback: CallbackQuery, session: AsyncSession, db_user: 
             f"ℹ️ {t(lang, 'set_sec_info')}",
             reply_markup=settings_info_keyboard(lang),
         )
+
+
+def _del_acc_menu_text(lang: str) -> str:
+    return (
+        f"<b>🗑 {t(lang, 'del_acc_title')}</b>\n\n"
+        f"{t(lang, 'del_acc_intro')}\n\n"
+        f"<b>📄 {t(lang, 'del_acc_data')}</b>\n"
+        f"{t(lang, 'del_acc_data_hint')}\n\n"
+        f"<b>📡 {t(lang, 'del_acc_channels')}</b>\n"
+        f"{t(lang, 'del_acc_channels_hint')}\n\n"
+        f"<b>🗄 {t(lang, 'del_acc_purge')}</b>\n"
+        f"{t(lang, 'del_acc_purge_hint')}"
+    )
+
+
+@router.callback_query(F.data == "set:delacc")
+async def del_account_menu(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    await state.clear()
+    lang = await PreferencesService(session).lang(db_user)
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(
+            _del_acc_menu_text(lang),
+            reply_markup=account_delete_keyboard(lang),
+        )
+
+
+@router.callback_query(F.data == "set:delacc:cancel")
+async def del_account_cancel(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    await state.clear()
+    lang = await PreferencesService(session).lang(db_user)
+    await callback.answer(t(lang, "del_acc_cancelled"))
+    if callback.message:
+        await callback.message.edit_text(
+            _del_acc_menu_text(lang),
+            reply_markup=account_delete_keyboard(lang),
+        )
+
+
+@router.callback_query(F.data.in_({"set:delacc:data", "set:delacc:full", "set:delacc:purge"}))
+async def del_account_ask_confirm(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    raw = callback.data or ""
+    lang = await PreferencesService(session).lang(db_user)
+    if raw.endswith(":purge"):
+        mode = "purge"
+        mode_title = t(lang, "del_acc_purge")
+    elif raw.endswith(":full"):
+        mode = "full"
+        mode_title = t(lang, "del_acc_channels")
+    else:
+        mode = "data"
+        mode_title = t(lang, "del_acc_data")
+    await state.set_state(DeleteAccountStates.waiting_confirm)
+    await state.update_data(del_acc_mode=mode)
+    text = (
+        f"<b>⚠️ {t(lang, 'del_acc_confirm_title')}</b>\n\n"
+        f"{mode_title}\n\n"
+        f"{t(lang, 'del_acc_confirm_body')}"
+    )
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(
+            text,
+            reply_markup=account_delete_confirm_keyboard(lang),
+        )
+
+
+_CONFIRM_OK = frozenset(
+    {
+        "удалить",
+        "да",
+        "delete",
+        "yes",
+        "удали",
+        "confirm",
+    }
+)
+
+
+@router.message(DeleteAccountStates.waiting_confirm)
+async def del_account_confirm_typed(
+    message: Message,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    from aiogram.types import ReplyKeyboardRemove
+
+    from app.bot.handlers.home import send_welcome_onboarding
+
+    lang = await PreferencesService(session).lang(db_user)
+    raw = (message.text or "").strip().lower()
+    data = await state.get_data()
+    mode = data.get("del_acc_mode") or "data"
+    await state.clear()
+
+    if raw not in _CONFIRM_OK:
+        await message.answer(t(lang, "del_acc_cancelled"))
+        await open_settings(message, session, db_user)
+        return
+
+    prefs = PreferencesService(session)
+    if mode == "purge":
+        await prefs.full_reset_user(db_user, purge_orphan_channels=True)
+        done = t(lang, "del_acc_done_purge")
+    elif mode == "full":
+        await prefs.full_reset_user(db_user)
+        done = t(lang, "del_acc_done_full")
+    else:
+        await prefs.soft_reset_user(db_user)
+        done = t(lang, "del_acc_done_data")
+
+    await message.answer(f"✅ {done}", reply_markup=ReplyKeyboardRemove())
+    await send_welcome_onboarding(message, "ru")
 
 
 @router.callback_query(F.data == "set:digests")

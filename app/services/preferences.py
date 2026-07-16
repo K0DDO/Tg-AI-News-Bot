@@ -120,12 +120,18 @@ class PreferencesService:
             "channels": 0,
         }
 
-    async def full_reset_user(self, user: User) -> dict[str, int]:
+    async def full_reset_user(
+        self,
+        user: User,
+        *,
+        purge_orphan_channels: bool = False,
+    ) -> dict[str, int]:
         """
         Full first-run wipe for the user:
-        - same as soft_reset
-        - unlink UserChannel (Channel rows stay in DB for re-add)
-        - restore default categories / theme weights / digest prefs
+        - reset settings + clear states/reactions
+        - unlink UserChannel
+        - if purge_orphan_channels: delete Channel rows that no other user follows
+          (shared channels are kept)
         """
         from app.models import Reaction
 
@@ -151,16 +157,41 @@ class PreferencesService:
         except Exception:
             pass
 
+        # Capture channel ids before unlink (for orphan purge)
+        own_channel_ids = list(
+            (
+                await self._session.execute(
+                    select(UserChannel.channel_id).where(UserChannel.user_id == user.id)
+                )
+            ).scalars().all()
+        )
+
         st = await self._session.execute(
             delete(UserEventState).where(UserEventState.user_id == user.id)
         )
         rx = await self._session.execute(delete(Reaction).where(Reaction.user_id == user.id))
         ch = await self._session.execute(delete(UserChannel).where(UserChannel.user_id == user.id))
+
+        purged = 0
+        if purge_orphan_channels and own_channel_ids:
+            for cid in own_channel_ids:
+                others = await self._session.scalar(
+                    select(func.count())
+                    .select_from(UserChannel)
+                    .where(UserChannel.channel_id == cid)
+                )
+                if int(others or 0) == 0:
+                    channel = await self._session.get(Channel, cid)
+                    if channel is not None:
+                        await self._session.delete(channel)
+                        purged += 1
+
         await self._session.commit()
         return {
             "states": int(st.rowcount or 0),
             "reactions": int(rx.rowcount or 0),
             "channels": int(ch.rowcount or 0),
+            "purged_channels": purged,
         }
 
     async def mark_welcome_seen(self, user: User) -> None:
