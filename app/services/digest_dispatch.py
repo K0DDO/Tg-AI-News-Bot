@@ -54,6 +54,11 @@ async def run_digest_cycle() -> dict:
                 if user is None or getattr(user, "is_banned", False):
                     skipped += 1
                     continue
+                from app.services.whitelist import WhitelistService
+
+                if not await WhitelistService(session).can_use_bot(user.telegram_id):
+                    skipped += 1
+                    continue
                 if is_dnd_active(us) or not is_digest_due(us, now_utc=now):
                     skipped += 1
                     continue

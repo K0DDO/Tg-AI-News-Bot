@@ -39,6 +39,7 @@ BTN_STATS = "📊 Статистика"
 BTN_LOGS = "📜 Логи"
 BTN_DIAG = "🧪 Диагностика"
 BTN_USERS = "👥 Пользователи"
+BTN_WHITELIST = "🔐 Вайтлист"
 BTN_PASSWORD = "🔑 Сменить пароль"
 BTN_EXIT = "🚪 Выйти"
 BTN_CANCEL = "❌ Отмена"
@@ -48,8 +49,8 @@ def admin_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_STATS), KeyboardButton(text=BTN_USERS)],
-            [KeyboardButton(text=BTN_LOGS), KeyboardButton(text=BTN_DIAG)],
-            [KeyboardButton(text=BTN_PASSWORD)],
+            [KeyboardButton(text=BTN_WHITELIST), KeyboardButton(text=BTN_LOGS)],
+            [KeyboardButton(text=BTN_DIAG), KeyboardButton(text=BTN_PASSWORD)],
             [KeyboardButton(text=BTN_EXIT)],
         ],
         resize_keyboard=True,
@@ -96,6 +97,7 @@ def _user_actions_kb(
     is_banned: bool,
     target_acc: AdminAccount | None,
     actor_is_owner: bool,
+    is_whitelisted: bool = False,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     rows.append(
@@ -106,6 +108,32 @@ def _user_actions_kb(
             )
         ]
     )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="📡 Каналы пользователя",
+                callback_data=f"adm:uch:{user_id}",
+            )
+        ]
+    )
+    if is_whitelisted:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🔐 Убрать из вайтлиста",
+                    callback_data=f"adm:wlrem:{user_id}",
+                )
+            ]
+        )
+    else:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🔐 В вайтлист",
+                    callback_data=f"adm:wladd:{user_id}",
+                )
+            ]
+        )
     if is_banned:
         rows.append(
             [InlineKeyboardButton(text="✅ Разбанить", callback_data=f"adm:unban:{user_id}")]
@@ -223,9 +251,12 @@ async def _refresh_user_card(
     target: User,
     actor: User,
 ) -> None:
+    from app.services.whitelist import WhitelistService
+
     svc = AdminService(session)
     acc = await svc.get_account(target.id)
     actor_owner = await svc.is_owner(actor)
+    wl = await WhitelistService(session).is_whitelisted(target.telegram_id)
     if callback.message:
         await _track(state, callback.message)
         await callback.message.edit_text(
@@ -235,6 +266,7 @@ async def _refresh_user_card(
                 is_banned=bool(target.is_banned),
                 target_acc=acc,
                 actor_is_owner=actor_owner,
+                is_whitelisted=wl,
             ),
         )
 
@@ -409,20 +441,56 @@ async def admin_stats(
     if not await _require_admin(session, db_user, state):
         raise SkipHandler()
     stats = await AdminService(session).admin_statistics()
-    text = (
-        "<b>📊 Статистика</b>\n\n"
-        f"👥 <b>Пользователи</b>\n"
-        f"Всего: <b>{stats['users_total']}</b>\n\n"
-        f"📰 <b>Новости</b>\n"
-        f"Постов: <b>{stats['posts']}</b>\n\n"
-        f"🔥 <b>Events</b>\n"
-        f"Событий: <b>{stats['events']}</b>\n\n"
-        f"📡 <b>Каналы</b>\n"
-        f"Всего: <b>{stats['channels']}</b>\n\n"
-        f"🤖 <b>AI запросы</b>\n"
-        f"Обращений: <b>{stats['ai_requests']}</b>"
+    lines = [
+        "<b>📊 Статистика</b>",
+        "",
+        "👥 <b>Пользователи</b>",
+        f"Всего: <b>{stats['users_total']}</b> · активны за сутки: <b>{stats['users_active_today']}</b>",
+        "",
+        "📡 <b>Каналы</b>",
+        f"Всего в БД: <b>{stats['channels']}</b>",
+        f"С подписчиками: <b>{stats['channels_linked']}</b>",
+        f"Без подписчиков (orphan): <b>{stats['channels_orphan']}</b>",
+        "",
+        "<b>Кто сколько каналов</b>",
+    ]
+    by_user = stats.get("channels_by_user") or []
+    if not by_user:
+        lines.append("— нет")
+    else:
+        for row in by_user:
+            uname = f"@{row['username']}" if row.get("username") else "—"
+            lines.append(
+                f"· <code>{row['telegram_id']}</code> {uname}: <b>{row['count']}</b>"
+            )
+    lines.extend(
+        [
+            "",
+            "📰 Постов: <b>{posts}</b> · 🔥 Events: <b>{events}</b>".format(**stats),
+            "🤖 AI запросов: <b>{ai_requests}</b>".format(**stats),
+            "",
+            "🔐 Вайтлист: <b>{status}</b> ({n} id)".format(
+                status="ВКЛ" if stats.get("whitelist_enabled") else "выкл",
+                n=stats.get("whitelist_count", 0),
+            ),
+        ]
     )
-    await _admin_answer(message, state, text)
+    kb_rows: list[list[InlineKeyboardButton]] = []
+    if int(stats.get("channels_orphan") or 0) > 0:
+        kb_rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"🧹 Удалить orphan-каналы ({stats['channels_orphan']})",
+                    callback_data="adm:purge_orphans",
+                )
+            ]
+        )
+    await _admin_answer(
+        message,
+        state,
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows) if kb_rows else None,
+    )
 
 
 @router.message(AdminAuthStates.menu, F.text == BTN_LOGS)
@@ -553,6 +621,9 @@ async def admin_users_find(
         return
     acc = await svc.get_account(target.id)
     actor_owner = await svc.is_owner(db_user)
+    from app.services.whitelist import WhitelistService
+
+    wl = await WhitelistService(session).is_whitelisted(target.telegram_id)
     await _admin_answer(
         message,
         state,
@@ -562,6 +633,7 @@ async def admin_users_find(
             is_banned=bool(target.is_banned),
             target_acc=acc,
             actor_is_owner=actor_owner,
+            is_whitelisted=wl,
         ),
     )
 
@@ -658,6 +730,9 @@ async def admin_user_stats(
 
     await callback.answer()
     if callback.message:
+        from app.services.whitelist import WhitelistService
+
+        wl = await WhitelistService(session).is_whitelisted(target.telegram_id)
         await _track(state, callback.message)
         await callback.message.edit_text(
             "\n".join(lines),
@@ -666,7 +741,83 @@ async def admin_user_stats(
                 is_banned=bool(target.is_banned),
                 target_acc=acc,
                 actor_is_owner=actor_owner,
+                is_whitelisted=wl,
             ),
+        )
+
+
+@router.callback_query(F.data.startswith("adm:uch:"))
+async def admin_user_channels(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    uid = int((callback.data or "").split(":")[2])
+    svc = AdminService(session)
+    target = (await session.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+    if not target:
+        await callback.answer("Не найден", show_alert=True)
+        return
+    channels = await svc.list_user_channels(target)
+    acc = await svc.get_account(target.id)
+    actor_owner = await svc.is_owner(db_user)
+    from app.services.whitelist import WhitelistService
+
+    wl = await WhitelistService(session).is_whitelisted(target.telegram_id)
+    lines = [
+        f"<b>📡 Каналы</b> {_role_emoji(acc, is_banned=bool(target.is_banned))}",
+        f"Telegram: {_tg_line(target)}",
+        f"Всего: <b>{len(channels)}</b>",
+        "",
+    ]
+    if not channels:
+        lines.append("— нет каналов")
+    else:
+        for ch in channels[:40]:
+            mark = "✅" if ch["active"] else "⏸"
+            handle = f"@{ch['username']}" if ch.get("username") else f"id={ch['id']}"
+            title = (ch.get("title") or "—")[:40]
+            lines.append(f"{mark} {handle} — {title}")
+        if len(channels) > 40:
+            lines.append(f"… и ещё {len(channels) - 40}")
+    await callback.answer()
+    if callback.message:
+        await _track(state, callback.message)
+        await callback.message.edit_text(
+            "\n".join(lines),
+            reply_markup=_user_actions_kb(
+                target.id,
+                is_banned=bool(target.is_banned),
+                target_acc=acc,
+                actor_is_owner=actor_owner,
+                is_whitelisted=wl,
+            ),
+        )
+
+
+@router.callback_query(F.data == "adm:purge_orphans")
+async def admin_purge_orphans(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    n = await AdminService(session).purge_orphan_channels()
+    record_admin_log("INFO", f"Purged orphan channels n={n} by={db_user.id}")
+    await callback.answer(f"Удалено: {n}", show_alert=True)
+    if callback.message:
+        stats = await AdminService(session).admin_statistics()
+        await callback.message.edit_text(
+            f"✅ Удалено orphan-каналов: <b>{n}</b>\n\n"
+            f"Сейчас в БД: <b>{stats['channels']}</b> "
+            f"(с подписчиками: {stats['channels_linked']})"
         )
 
 
@@ -755,6 +906,9 @@ async def admin_soft_reset(
     await callback.answer("Сброшен как новый", show_alert=True)
     acc = await svc.get_account(target.id)
     actor_owner = await svc.is_owner(db_user)
+    from app.services.whitelist import WhitelistService
+
+    wl = await WhitelistService(session).is_whitelisted(target.telegram_id)
     if callback.message:
         await _track(state, callback.message)
         await callback.message.edit_text(
@@ -767,6 +921,7 @@ async def admin_soft_reset(
                 is_banned=bool(target.is_banned),
                 target_acc=acc,
                 actor_is_owner=actor_owner,
+                is_whitelisted=wl,
             ),
         )
 
@@ -887,6 +1042,238 @@ async def admin_demote(
         return
     record_admin_log("INFO", f"Removed admin user id={uid} by={db_user.id}")
     await callback.answer("Админ снят", show_alert=True)
+    await _refresh_user_card(callback, session, state, target, db_user)
+
+
+@router.message(AdminAuthStates.menu, F.text == BTN_WHITELIST)
+async def admin_whitelist_menu(
+    message: Message,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        raise SkipHandler()
+    from app.services.whitelist import WhitelistService
+
+    wl = WhitelistService(session)
+    enabled = await wl.is_whitelist_enabled()
+    entries = await wl.list_entries(limit=30)
+    lines = [
+        "<b>🔐 Вайтлист</b>",
+        "",
+        f"Режим: <b>{'ВКЛЮЧЁН' if enabled else 'выключен'}</b>",
+        "Когда включён — ботом могут пользоваться только ID из списка,",
+        "админы и ID из ADMIN_TELEGRAM_IDS.",
+        "",
+        f"Записей: <b>{len(entries)}</b>",
+    ]
+    if entries:
+        lines.append("")
+        for e in entries:
+            note = f" — {e.note}" if e.note else ""
+            lines.append(f"· <code>{e.telegram_id}</code>{note}")
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🟢 Включить" if not enabled else "🔴 Выключить",
+                    callback_data="adm:wl:toggle",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="➕ Добавить Telegram ID",
+                    callback_data="adm:wl:ask",
+                )
+            ],
+        ]
+    )
+    await _admin_answer(message, state, "\n".join(lines), reply_markup=kb)
+
+
+@router.callback_query(F.data == "adm:wl:toggle")
+async def admin_wl_toggle(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    from app.services.whitelist import WhitelistService
+
+    wl = WhitelistService(session)
+    enabled = await wl.is_whitelist_enabled()
+    await wl.set_whitelist_enabled(not enabled)
+    # When enabling, auto-add current admins + env admins
+    if not enabled:
+        from app.config import get_settings
+
+        for tid in get_settings().admin_id_set():
+            await wl.add(tid, note="env admin")
+        for _acc, u in await AdminService(session).list_admins():
+            await wl.add(u.telegram_id, note="admin")
+        await wl.add(db_user.telegram_id, note="self")
+    record_admin_log(
+        "INFO",
+        f"Whitelist {'ON' if not enabled else 'OFF'} by={db_user.id}",
+    )
+    await callback.answer("Вайтлист " + ("ВКЛ" if not enabled else "выкл"), show_alert=True)
+    if callback.message:
+        enabled2 = await wl.is_whitelist_enabled()
+        entries = await wl.list_entries(limit=30)
+        lines = [
+            "<b>🔐 Вайтлист</b>",
+            "",
+            f"Режим: <b>{'ВКЛЮЧЁН' if enabled2 else 'выключен'}</b>",
+            f"Записей: <b>{len(entries)}</b>",
+        ]
+        for e in entries:
+            note = f" — {e.note}" if e.note else ""
+            lines.append(f"· <code>{e.telegram_id}</code>{note}")
+        await callback.message.edit_text(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="🟢 Включить" if not enabled2 else "🔴 Выключить",
+                            callback_data="adm:wl:toggle",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="➕ Добавить Telegram ID",
+                            callback_data="adm:wl:ask",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data == "adm:wl:ask")
+async def admin_wl_ask(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await state.set_state(AdminAuthStates.whitelist_add)
+    await state.update_data(admin_ok=True)
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer(
+            "Пришлите Telegram ID (число) или @username существующего пользователя.\n"
+            f"Или «{BTN_CANCEL}».",
+            reply_markup=ReplyKeyboardMarkup(
+                keyboard=[[KeyboardButton(text=BTN_CANCEL)]],
+                resize_keyboard=True,
+            ),
+        )
+
+
+@router.message(AdminAuthStates.whitelist_add, F.text == BTN_CANCEL)
+async def admin_wl_add_cancel(
+    message: Message,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        raise SkipHandler()
+    await state.set_state(AdminAuthStates.menu)
+    await state.update_data(admin_ok=True)
+    await _admin_answer(message, state, "Отменено.", reply_markup=admin_menu_keyboard())
+
+
+@router.message(AdminAuthStates.whitelist_add, F.text, ~F.text.startswith("/"))
+async def admin_wl_add_save(
+    message: Message,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        raise SkipHandler()
+    from app.services.whitelist import WhitelistService
+
+    raw = (message.text or "").strip().lstrip("@")
+    tid: int | None = None
+    note = ""
+    if raw.isdigit():
+        tid = int(raw)
+    else:
+        svc = AdminService(session)
+        u = await svc.find_user(raw)
+        if u:
+            tid = int(u.telegram_id)
+            note = u.username or ""
+    if tid is None:
+        await _admin_answer(message, state, "Не понял ID. Пришлите число или @username.")
+        return
+    await WhitelistService(session).add(tid, note=note)
+    record_admin_log("INFO", f"Whitelist add tid={tid} by={db_user.id}")
+    await state.set_state(AdminAuthStates.menu)
+    await state.update_data(admin_ok=True)
+    await _admin_answer(
+        message,
+        state,
+        f"✅ Добавлен в вайтлист: <code>{tid}</code>",
+        reply_markup=admin_menu_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith("adm:wladd:"))
+async def admin_wl_add_user(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    uid = int((callback.data or "").split(":")[2])
+    target = (await session.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+    if not target:
+        await callback.answer("Не найден", show_alert=True)
+        return
+    from app.services.whitelist import WhitelistService
+
+    await WhitelistService(session).add(
+        target.telegram_id, note=target.username or f"user#{target.id}"
+    )
+    record_admin_log("INFO", f"Whitelist add user id={uid} by={db_user.id}")
+    await callback.answer("В вайтлисте", show_alert=True)
+    await _refresh_user_card(callback, session, state, target, db_user)
+
+
+@router.callback_query(F.data.startswith("adm:wlrem:"))
+async def admin_wl_rem_user(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    uid = int((callback.data or "").split(":")[2])
+    target = (await session.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+    if not target:
+        await callback.answer("Не найден", show_alert=True)
+        return
+    from app.services.whitelist import WhitelistService
+
+    await WhitelistService(session).remove(target.telegram_id)
+    record_admin_log("INFO", f"Whitelist remove user id={uid} by={db_user.id}")
+    await callback.answer("Убран из вайтлиста", show_alert=True)
     await _refresh_user_card(callback, session, state, target, db_user)
 
 

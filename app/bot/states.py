@@ -32,6 +32,7 @@ class AdminAuthStates(StatesGroup):
     appoint_admin = State()
     change_password = State()
     confirm_change_password = State()
+    whitelist_add = State()
 
 
 class TimezoneStates(StatesGroup):

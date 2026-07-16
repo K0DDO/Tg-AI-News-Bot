@@ -256,7 +256,8 @@ class ChannelService:
         if remaining == 0:
             channel = await self._session.get(Channel, channel_id)
             if channel:
-                channel.enabled = False
+                # No subscribers left — remove channel (and cascaded messages)
+                await self._session.delete(channel)
         await self._session.commit()
         return True
 

@@ -192,8 +192,11 @@ class PreferencesService:
         await self._session.flush()
 
         purged = 0
-        if purge_orphan_channels and own_channel_ids:
-            purged = await self._purge_orphan_channels(list(own_channel_ids))
+        if purge_orphan_channels:
+            if own_channel_ids:
+                purged = await self._purge_orphan_channels(list(own_channel_ids))
+            # Also sweep any leftover orphans (e.g. from older wipes / unsubscribes)
+            purged += await self.purge_all_orphan_channels()
 
         action = "account_wipe_purge" if purge_orphan_channels else "account_wipe_full"
         await log_user_action(
@@ -214,10 +217,8 @@ class PreferencesService:
                 await self._session.delete(row)
                 user_deleted = 1
                 await self._session.flush()
-                # After user delete, UserChannels for this user are gone; purge again
-                if purge_orphan_channels and own_channel_ids:
-                    extra = await self._purge_orphan_channels(list(own_channel_ids))
-                    purged += extra
+                if purge_orphan_channels:
+                    purged += await self.purge_all_orphan_channels()
 
         await self._session.commit()
         return {
@@ -230,10 +231,9 @@ class PreferencesService:
         }
 
     async def _purge_orphan_channels(self, channel_ids: list[int]) -> int:
-        """Delete channels that have zero remaining UserChannel links."""
+        """Delete given channels that have zero remaining UserChannel links."""
         if not channel_ids:
             return 0
-        # Ensure unlinks from this transaction are visible before orphan check
         await self._session.flush()
         still_linked = set(
             (
@@ -247,7 +247,30 @@ class PreferencesService:
         orphan_ids = [cid for cid in channel_ids if cid not in still_linked]
         if not orphan_ids:
             return 0
-        # Messages / user_channels cascade at DB level
+        result = await self._session.execute(
+            delete(Channel)
+            .where(Channel.id.in_(orphan_ids))
+            .execution_options(synchronize_session=False)
+        )
+        await self._session.flush()
+        return int(result.rowcount or 0)
+
+    async def purge_all_orphan_channels(self) -> int:
+        """Delete every channel with zero UserChannel links."""
+        await self._session.flush()
+        orphan_ids = list(
+            (
+                await self._session.execute(
+                    select(Channel.id).where(
+                        ~select(UserChannel.id)
+                        .where(UserChannel.channel_id == Channel.id)
+                        .exists()
+                    )
+                )
+            ).scalars().all()
+        )
+        if not orphan_ids:
+            return 0
         result = await self._session.execute(
             delete(Channel)
             .where(Channel.id.in_(orphan_ids))

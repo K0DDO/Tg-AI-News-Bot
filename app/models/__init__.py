@@ -10,6 +10,7 @@ from app.models.reaction import Reaction
 from app.models.user import User
 from app.models.user_action import UserActionLog
 from app.models.user_prefs import UserEvent, UserEventState, UserNewsState, UserSettings
+from app.models.whitelist import BotSetting, WhitelistEntry
 
 __all__ = [
     "User",
@@ -37,4 +38,6 @@ __all__ = [
     "EventNode",
     "NODE_TYPES",
     "EDGE_TYPES",
+    "BotSetting",
+    "WhitelistEntry",
 ]

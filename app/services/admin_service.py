@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.models import AdminAccount, Channel, Event, Message, User, UserChannel, UserEventState, UserSettings
 from app.models.knowledge import Edge, Node
+from app.models.whitelist import WhitelistEntry
 
 
 def hash_password(password: str) -> str:
@@ -273,10 +274,42 @@ class AdminService:
                 }
                 for a in actions
             ],
+            "channel_list": await self.list_user_channels(user),
         }
+
+    async def list_user_channels(self, user: User) -> list[dict]:
+        rows = (
+            await self._session.execute(
+                select(Channel, UserChannel)
+                .join(UserChannel, UserChannel.channel_id == Channel.id)
+                .where(UserChannel.user_id == user.id)
+                .order_by(UserChannel.is_active.desc(), Channel.title)
+            )
+        ).all()
+        out: list[dict] = []
+        for ch, link in rows:
+            out.append(
+                {
+                    "id": ch.id,
+                    "title": ch.title,
+                    "username": ch.username,
+                    "active": bool(link.is_active),
+                }
+            )
+        return out
+
+    async def purge_orphan_channels(self) -> int:
+        from app.services.preferences import PreferencesService
+
+        n = await PreferencesService(self._session).purge_all_orphan_channels()
+        await self._session.commit()
+        return n
 
     async def admin_statistics(self) -> dict:
         from datetime import timedelta
+
+        from app.models import AiUsageLog
+        from app.services.whitelist import WhitelistService
 
         now = datetime.now(timezone.utc)
         day_ago = now - timedelta(days=1)
@@ -297,8 +330,31 @@ class AdminService:
         nodes = await self._session.scalar(select(func.count()).select_from(Node)) or 0
         edges = await self._session.scalar(select(func.count()).select_from(Edge)) or 0
         channels = await self._session.scalar(select(func.count()).select_from(Channel)) or 0
+        channels_linked = (
+            await self._session.scalar(
+                select(func.count(func.distinct(UserChannel.channel_id))).select_from(UserChannel)
+            )
+            or 0
+        )
+        channels_orphan = max(0, int(channels) - int(channels_linked))
 
-        from app.models import AiUsageLog
+        # Per-user channel counts (top)
+        per_user = list(
+            (
+                await self._session.execute(
+                    select(
+                        User.id,
+                        User.telegram_id,
+                        User.username,
+                        func.count(UserChannel.id).label("n"),
+                    )
+                    .outerjoin(UserChannel, UserChannel.user_id == User.id)
+                    .group_by(User.id)
+                    .order_by(func.count(UserChannel.id).desc())
+                    .limit(15)
+                )
+            ).all()
+        )
 
         ai_n = await self._session.scalar(select(func.count()).select_from(AiUsageLog)) or 0
         tokens_in = await self._session.scalar(
@@ -307,6 +363,11 @@ class AdminService:
         tokens_out = await self._session.scalar(
             select(func.coalesce(func.sum(AiUsageLog.tokens_out), 0))
         ) or 0
+
+        wl = WhitelistService(self._session)
+        wl_on = await wl.is_whitelist_enabled()
+        wl_n = await self._session.scalar(select(func.count()).select_from(WhitelistEntry)) or 0
+
         return {
             "users_total": int(users_total),
             "users_active_today": int(users_active),
@@ -315,10 +376,23 @@ class AdminService:
             "nodes": int(nodes),
             "edges": int(edges),
             "channels": int(channels),
+            "channels_linked": int(channels_linked),
+            "channels_orphan": int(channels_orphan),
+            "channels_by_user": [
+                {
+                    "user_id": int(uid),
+                    "telegram_id": int(tid),
+                    "username": uname,
+                    "count": int(n or 0),
+                }
+                for uid, tid, uname, n in per_user
+            ],
             "ai_requests": int(ai_n),
             "tokens_in": int(tokens_in),
             "tokens_out": int(tokens_out),
             "tokens_total": int(tokens_in) + int(tokens_out),
+            "whitelist_enabled": wl_on,
+            "whitelist_count": int(wl_n),
         }
 
     async def clear_user_unread(self, user_id: int) -> int:
