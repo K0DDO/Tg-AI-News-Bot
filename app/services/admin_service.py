@@ -134,6 +134,12 @@ class AdminService:
 
         return await PreferencesService(self._session).soft_reset_user(user)
 
+    async def full_reset_user(self, user: User) -> dict[str, int]:
+        """Delegate — channels unlinked (kept in DB), user looks brand new."""
+        from app.services.preferences import PreferencesService
+
+        return await PreferencesService(self._session).full_reset_user(user)
+
     async def ban_user(self, target: User) -> None:
         target.is_banned = True
         target.banned_at = datetime.now(timezone.utc)

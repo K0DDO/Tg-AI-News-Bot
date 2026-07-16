@@ -27,6 +27,11 @@ from app.services.admin_service import AdminService, verify_password
 from app.services.preferences import PreferencesService
 from app.services.redis_client import ping_redis
 
+try:
+    from aiogram.dispatcher.event.bases import SkipHandler
+except ImportError:  # pragma: no cover
+    from aiogram.exceptions import SkipHandler  # type: ignore
+
 router = Router(name="admin_panel")
 
 BTN_STATS = "📊 Статистика"
@@ -75,8 +80,16 @@ def _user_actions_kb(user_id: int, *, is_banned: bool) -> InlineKeyboardMarkup:
     rows.append(
         [
             InlineKeyboardButton(
-                text="🔄 Сбросить как нового",
+                text="🔄 Сбросить (каналы оставить)",
                 callback_data=f"adm:reset:{user_id}",
+            )
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🧹 Полная очистка",
+                callback_data=f"adm:wipe:{user_id}",
             )
         ]
     )
@@ -151,6 +164,10 @@ async def cmd_admin(
     svc = AdminService(session)
     await svc.ensure_owner_row(db_user)
     if not await svc.is_admin_user(db_user):
+        # Ignore for regular users; also unstick any leftover admin FSM
+        current = await state.get_state()
+        if current and str(current).startswith("AdminAuthStates:"):
+            await state.clear()
         return
 
     acc = await svc.get_account(db_user.id)
@@ -178,7 +195,15 @@ async def cmd_admin(
 
 
 @router.message(AdminAuthStates.create_password)
-async def admin_create_password(message: Message, state: FSMContext) -> None:
+async def admin_create_password(
+    message: Message,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await AdminService(session).is_admin_user(db_user):
+        await state.clear()
+        raise SkipHandler()
     pwd = (message.text or "").strip()
     await _track(state, message)
     await _safe_delete(message)
@@ -197,6 +222,9 @@ async def admin_confirm_password(
     db_user: User,
     state: FSMContext,
 ) -> None:
+    if not await AdminService(session).is_admin_user(db_user):
+        await state.clear()
+        raise SkipHandler()
     data = await state.get_data()
     pwd = data.get("new_password") or ""
     await _track(state, message)
@@ -221,6 +249,9 @@ async def admin_enter_password(
     state: FSMContext,
 ) -> None:
     svc = AdminService(session)
+    if not await svc.is_admin_user(db_user):
+        await state.clear()
+        raise SkipHandler()
     acc = await svc.get_account(db_user.id)
     pwd_ok = acc and verify_password(message.text or "", acc.password_hash)
     await _track(state, message)
@@ -443,8 +474,37 @@ async def admin_soft_reset(callback: CallbackQuery, session: AsyncSession, state
         await callback.message.edit_text(
             _user_card(target)
             + "\n\n🔄 Сброшен: онбординг заново, история/избранное очищены.\n"
-            "📡 Каналы сохранены.\n"
-            "Пусть пользователь нажмёт /start.",
+            "📡 Каналы у пользователя остались.\n"
+            "Пусть нажмёт /start.",
+            reply_markup=_user_actions_kb(target.id, is_banned=bool(target.is_banned)),
+        )
+
+
+@router.callback_query(F.data.startswith("adm:wipe:"))
+async def admin_full_wipe(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
+    if not await _require_session(state):
+        await callback.answer("Сначала /admin", show_alert=True)
+        return
+    uid = int((callback.data or "").split(":")[2])
+    svc = AdminService(session)
+    target = (await session.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+    if not target:
+        await callback.answer("Не найден", show_alert=True)
+        return
+    stats = await svc.full_reset_user(target)
+    record_admin_log(
+        "INFO",
+        f"Full-wipe user id={uid} states={stats.get('states')} "
+        f"channels={stats.get('channels')} reactions={stats.get('reactions')}",
+    )
+    await callback.answer("Полностью очищен", show_alert=True)
+    if callback.message:
+        await _track(state, callback.message)
+        await callback.message.edit_text(
+            _user_card(target)
+            + "\n\n🧹 Полная очистка: как будто бот впервые.\n"
+            "📡 Связи с каналами сняты (сами каналы в базе остались).\n"
+            "Пусть нажмёт /start и добавит каналы заново.",
             reply_markup=_user_actions_kb(target.id, is_banned=bool(target.is_banned)),
         )
 

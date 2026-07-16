@@ -226,7 +226,7 @@ def history_keyboard(
         [InlineKeyboardButton(text=f"🔍 {t(lang, 'search')}", callback_data="hist:search")],
     ]
     for event_id, title in items or []:
-        short = (title[:28] + "…") if len(title) > 28 else title
+        short = (title[:42] + "…") if len(title) > 42 else title
         rows.append(
             [
                 InlineKeyboardButton(text=f"📰 {short}", callback_data=f"hist:open:{event_id}"),
@@ -578,18 +578,24 @@ def categories_keyboard(lang: str, enabled: list[str] | None) -> InlineKeyboardM
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def theme_weights_keyboard(lang: str, weights: dict[str, int] | None) -> InlineKeyboardMarkup:
+def theme_weights_keyboard(
+    lang: str,
+    weights: dict[str, int] | None,
+    enabled: list[str] | None = None,
+) -> InlineKeyboardMarkup:
     from app.services.categories import DEFAULT_CATEGORIES, theme_display
 
     weights = weights or {}
+    keys = [k for k in (enabled or DEFAULT_CATEGORIES) if k in DEFAULT_CATEGORIES]
+    if not keys:
+        keys = list(DEFAULT_CATEGORIES)
     rows: list[list[InlineKeyboardButton]] = []
-    for key in DEFAULT_CATEGORIES:
-        stars = int(weights.get(key, 3))
-        star_txt = "⭐" * stars
+    for key in keys:
+        stars = max(1, min(5, int(weights.get(key, 3))))
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{theme_display(key)} {star_txt}",
+                    text=f"{theme_display(key)} · {stars}⭐",
                     callback_data=f"set:tw:{key}",
                 )
             ]
@@ -603,7 +609,7 @@ def theme_weight_pick_keyboard(lang: str, theme: str) -> InlineKeyboardMarkup:
 
     rows = [
         [
-            InlineKeyboardButton(text="⭐" * n, callback_data=f"set:twset:{theme}:{n}")
+            InlineKeyboardButton(text=f"{n}⭐", callback_data=f"set:twset:{theme}:{n}")
             for n in range(1, 6)
         ]
     ]

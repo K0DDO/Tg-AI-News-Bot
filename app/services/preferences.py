@@ -94,7 +94,7 @@ class PreferencesService:
         Make the user look 'new' for onboarding/testing:
         - reset settings flags (welcome/tutorial/language_chosen)
         - clear read/history/favorites (UserEventState) and reactions
-        - KEEP UserChannel links (sources stay)
+        - KEEP UserChannel links (sources stay visible)
         """
         from app.models import Reaction
 
@@ -117,6 +117,50 @@ class PreferencesService:
         return {
             "states": int(st.rowcount or 0),
             "reactions": int(rx.rowcount or 0),
+            "channels": 0,
+        }
+
+    async def full_reset_user(self, user: User) -> dict[str, int]:
+        """
+        Full first-run wipe for the user:
+        - same as soft_reset
+        - unlink UserChannel (Channel rows stay in DB for re-add)
+        - restore default categories / theme weights / digest prefs
+        """
+        from app.models import Reaction
+
+        settings = await self.get_or_create(user)
+        settings.welcome_seen = False
+        settings.tutorial_seen = False
+        settings.language_chosen = False
+        settings.language = "ru"
+        settings.news_language = "ru"
+        settings.enabled_categories = DEFAULT_CATEGORIES.copy()
+        settings.theme_weights = default_theme_weights()
+        settings.digest_mode = "1h"
+        settings.update_interval_minutes = 60
+        settings.notifications_enabled = True
+        settings.digest_chat_id = None
+        settings.digest_message_id = None
+        settings.digest_feed_ids = None
+        settings.last_digest_sent_at = None
+        settings.ignored_topics = ""
+        try:
+            flag_modified(settings, "enabled_categories")
+            flag_modified(settings, "theme_weights")
+        except Exception:
+            pass
+
+        st = await self._session.execute(
+            delete(UserEventState).where(UserEventState.user_id == user.id)
+        )
+        rx = await self._session.execute(delete(Reaction).where(Reaction.user_id == user.id))
+        ch = await self._session.execute(delete(UserChannel).where(UserChannel.user_id == user.id))
+        await self._session.commit()
+        return {
+            "states": int(st.rowcount or 0),
+            "reactions": int(rx.rowcount or 0),
+            "channels": int(ch.rowcount or 0),
         }
 
     async def mark_welcome_seen(self, user: User) -> None:

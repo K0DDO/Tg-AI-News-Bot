@@ -552,7 +552,9 @@ async def set_theme_weights_menu(callback: CallbackQuery, session: AsyncSession,
     if callback.message:
         await callback.message.edit_text(
             f"⭐ {t(lang, 'set_theme_weights')}",
-            reply_markup=theme_weights_keyboard(lang, settings.theme_weights),
+            reply_markup=theme_weights_keyboard(
+                lang, settings.theme_weights, settings.enabled_categories
+            ),
         )
 
 
@@ -567,7 +569,9 @@ async def set_theme_weight_save(callback: CallbackQuery, session: AsyncSession, 
     if callback.message:
         await callback.message.edit_text(
             f"⭐ {t(lang, 'set_theme_weights')}",
-            reply_markup=theme_weights_keyboard(lang, settings.theme_weights),
+            reply_markup=theme_weights_keyboard(
+                lang, settings.theme_weights, settings.enabled_categories
+            ),
         )
 
 
