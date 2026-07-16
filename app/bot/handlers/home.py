@@ -34,6 +34,7 @@ from app.bot.keyboards import (
 )
 from app.bot.states import ChannelBulkStates
 from app.bot.ui import format_home, format_how_to_use, format_privacy
+from app.bot.ui.nav import replace_screen
 from app.models import Event, User
 from app.services.preferences import PreferencesService
 
@@ -117,6 +118,10 @@ def _done_caption(lang: str) -> str:
     )
 
 
+def _lang_pick_text(lang: str) -> str:
+    return f"<b>🌍 {t(lang, 'choose_language')}</b>"
+
+
 async def send_welcome_onboarding(message: Message, lang: str = "ru") -> None:
     await send_banner(
         message,
@@ -149,20 +154,6 @@ async def send_home(message: Message, session: AsyncSession, user: User) -> None
     await message.answer(text, reply_markup=home_keyboard(lang))
 
 
-async def finish_onboarding(message: Message, session: AsyncSession, user: User) -> None:
-    prefs = PreferencesService(session)
-    await prefs.mark_welcome_seen(user)
-    await prefs.mark_tutorial_seen(user)
-    lang = await prefs.lang(user)
-    await message.answer(t(lang, "menu_hint"), reply_markup=main_menu(lang))
-    await send_banner(
-        message,
-        _done_caption(lang),
-        reply_markup=onboarding_done_keyboard(lang),
-        occasion="done",
-    )
-
-
 async def show_while_preparing(message: Message, lang: str) -> None:
     await message.answer(
         _while_caption(lang),
@@ -188,47 +179,48 @@ async def go_home(event: Message | CallbackQuery, session: AsyncSession, db_user
 
 @router.callback_query(F.data == "ob:begin")
 async def ob_begin(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
-    await callback.answer()
     lang = await _lang(session, db_user)
-    if callback.message:
-        await callback.message.answer(
-            f"<b>🌍 {t(lang, 'choose_language')}</b>",
-            reply_markup=language_keyboard(prefix="lang"),
-        )
+    await replace_screen(
+        callback,
+        _lang_pick_text(lang),
+        reply_markup=language_keyboard(prefix="oblang"),
+    )
 
 
-@router.callback_query(F.data.startswith("lang:"))
-async def set_lang(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
-    code = callback.data.split(":")[1]
+@router.callback_query(F.data.startswith("oblang:"))
+async def set_ob_lang(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    code = (callback.data or "").split(":", 1)[1]
+    if code not in LANG_LABELS:
+        await callback.answer("?", show_alert=True)
+        return
     prefs = PreferencesService(session)
     await prefs.set_language(db_user, code)
-    await callback.answer()
     label = LANG_LABELS.get(code, code)
-    if callback.message:
-        await callback.message.answer(f"✅ {t(code, 'ob_lang_picked', lang=label)}")
-        await callback.message.answer(
-            _privacy_caption(code),
-            reply_markup=privacy_keyboard(code),
-        )
+    text = (
+        f"✅ {t(code, 'ob_lang_picked', name=label)}\n\n"
+        f"{_privacy_caption(code)}"
+    )
+    await replace_screen(callback, text, reply_markup=privacy_keyboard(code))
 
 
 @router.callback_query(F.data == "ob:privacy_full")
 async def ob_privacy_full(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     lang = await _lang(session, db_user)
-    await callback.answer()
-    if callback.message:
-        await callback.message.answer(format_privacy(lang))
+    await replace_screen(
+        callback,
+        format_privacy(lang),
+        reply_markup=privacy_keyboard(lang),
+    )
 
 
 @router.callback_query(F.data == "ob:privacy_ok")
 async def ob_privacy_ok(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     lang = await _lang(session, db_user)
-    await callback.answer()
-    if callback.message:
-        await callback.message.answer(
-            _channels_caption(lang),
-            reply_markup=onboarding_channels_keyboard(lang),
-        )
+    await replace_screen(
+        callback,
+        _channels_caption(lang),
+        reply_markup=onboarding_channels_keyboard(lang),
+    )
 
 
 @router.callback_query(F.data == "ob:add_ch")
@@ -241,83 +233,125 @@ async def ob_add_channels(
     lang = await _lang(session, db_user)
     await state.set_state(ChannelBulkStates.waiting_list)
     await state.update_data(onboarding=True)
-    await callback.answer()
-    if callback.message:
-        await callback.message.answer(
-            f"<b>📡 {t(lang, 'ch_add')}</b>\n\n"
-            f"{t(lang, 'channels_hint')}\n\n"
-            f"<code>@appleinsider\n@technology\nhttps://t.me/news</code>"
-        )
+    await replace_screen(
+        callback,
+        f"<b>📡 {t(lang, 'ch_add')}</b>\n\n"
+        f"{t(lang, 'channels_hint')}\n\n"
+        f"<code>@appleinsider\n@technology\nhttps://t.me/news</code>",
+    )
 
 
 @router.callback_query(F.data == "ob:skip_ch")
 async def ob_skip_channels(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     lang = await _lang(session, db_user)
-    await callback.answer()
-    if callback.message:
-        await show_while_preparing(callback.message, lang)
+    await replace_screen(
+        callback,
+        _while_caption(lang),
+        reply_markup=onboarding_while_keyboard(lang),
+    )
 
 
 @router.callback_query(F.data == "ob:configure")
 async def ob_configure(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
-    from app.bot.handlers.settings import open_settings
+    from app.bot.keyboards import settings_keyboard
+    from app.bot.ui import format_settings
 
-    await callback.answer()
-    if callback.message:
-        await open_settings(callback.message, session, db_user)
+    prefs = PreferencesService(session)
+    settings = await prefs.get_or_create(db_user)
+    lang = settings.language or "ru"
+    await replace_screen(
+        callback,
+        format_settings(lang, settings),
+        reply_markup=settings_keyboard(lang),
+    )
 
 
 @router.callback_query(F.data.startswith("ob:tour:"))
 async def ob_tour(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     lang = await _lang(session, db_user)
-    step = int(callback.data.split(":")[2])
-    await callback.answer()
+    step = int((callback.data or "").split(":")[2])
     if step < 0 or step >= len(_TOUR_KEYS):
+        await callback.answer()
         return
     title_k, body_k = _TOUR_KEYS[step]
-    if callback.message:
-        await callback.message.answer(
-            f"<b>{t(lang, title_k)}</b>\n\n{t(lang, body_k)}",
-            reply_markup=onboarding_tour_keyboard(lang, step, len(_TOUR_KEYS)),
-        )
+    await replace_screen(
+        callback,
+        f"<b>{t(lang, title_k)}</b>\n\n{t(lang, body_k)}",
+        reply_markup=onboarding_tour_keyboard(lang, step, len(_TOUR_KEYS)),
+    )
 
 
 @router.callback_query(F.data == "ob:finish")
-async def ob_finish(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
-    await callback.answer()
-    if callback.message:
-        await finish_onboarding(callback.message, session, db_user)
-
-
 @router.callback_query(F.data == "ob:skip")
-async def ob_skip(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
-    await callback.answer()
-    if callback.message:
-        await finish_onboarding(callback.message, session, db_user)
+async def ob_finish(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    from aiogram.exceptions import TelegramBadRequest
+
+    prefs = PreferencesService(session)
+    await prefs.mark_welcome_seen(db_user)
+    await prefs.mark_tutorial_seen(db_user)
+    lang = await prefs.lang(db_user)
+    try:
+        await callback.answer()
+    except TelegramBadRequest:
+        pass
+    msg = callback.message
+    if not msg:
+        return
+    try:
+        await msg.delete()
+    except TelegramBadRequest:
+        try:
+            await msg.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+    await msg.answer(t(lang, "menu_hint"), reply_markup=main_menu(lang))
+    await send_banner(
+        msg,
+        _done_caption(lang),
+        reply_markup=onboarding_done_keyboard(lang),
+        occasion="done",
+    )
 
 
 @router.callback_query(F.data == "nav:howto")
 @router.callback_query(F.data.startswith("onb:"))
 async def how_to_use(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
     """How to use — with banner cover (replaces old auto-tour)."""
+    from aiogram.exceptions import TelegramBadRequest
+
     lang = await _lang(session, db_user)
-    await callback.answer()
-    if callback.message:
-        await send_banner(
-            callback.message,
-            format_how_to_use(lang),
-            reply_markup=how_to_keyboard(lang),
-            occasion="howto",
-        )
+    try:
+        await callback.answer()
+    except TelegramBadRequest:
+        pass
+    msg = callback.message
+    if not msg:
+        return
+    try:
+        await msg.delete()
+    except TelegramBadRequest:
+        pass
+    await send_banner(
+        msg,
+        format_how_to_use(lang),
+        reply_markup=how_to_keyboard(lang),
+        occasion="howto",
+    )
 
 
 @router.callback_query(F.data == "nav:settings")
 async def nav_settings(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
-    from app.bot.handlers.settings import open_settings
+    from app.bot.keyboards import settings_keyboard
+    from app.bot.ui import format_settings
 
-    await callback.answer()
-    if callback.message:
-        await open_settings(callback.message, session, db_user)
+    prefs = PreferencesService(session)
+    settings = await prefs.get_or_create(db_user)
+    lang = settings.language or "ru"
+    await replace_screen(
+        callback,
+        format_settings(lang, settings),
+        reply_markup=settings_keyboard(lang),
+    )
 
 
 @router.callback_query(F.data == "nav:search")

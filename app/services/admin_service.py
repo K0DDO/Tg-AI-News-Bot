@@ -128,6 +128,12 @@ class AdminService:
         await self._session.commit()
         return True
 
+    async def soft_reset_user(self, user: User) -> dict[str, int]:
+        """Delegate to PreferencesService — channels kept, onboarding reset."""
+        from app.services.preferences import PreferencesService
+
+        return await PreferencesService(self._session).soft_reset_user(user)
+
     async def ban_user(self, target: User) -> None:
         target.is_banned = True
         target.banned_at = datetime.now(timezone.utc)

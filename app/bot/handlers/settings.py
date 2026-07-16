@@ -76,10 +76,29 @@ async def set_back(callback: CallbackQuery, session: AsyncSession, db_user: User
 
 @router.callback_query(F.data == "set:lang")
 async def set_lang_menu(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    from app.bot.ui.nav import replace_screen
+
     lang = await PreferencesService(session).lang(db_user)
-    await callback.answer()
+    await replace_screen(
+        callback,
+        f"🌐 {t(lang, 'language')}",
+        reply_markup=language_keyboard(prefix="uilang"),
+    )
+
+
+@router.callback_query(F.data.startswith("uilang:"))
+async def set_ui_lang(callback: CallbackQuery, session: AsyncSession, db_user: User) -> None:
+    from app.bot.i18n import LANG_LABELS, SUPPORTED_LANGS
+
+    code = (callback.data or "").split(":", 1)[1]
+    if code not in SUPPORTED_LANGS:
+        await callback.answer("?", show_alert=True)
+        return
+    await PreferencesService(session).set_language(db_user, code)
+    label = LANG_LABELS.get(code, code)
+    await callback.answer(f"✅ {label}")
     if callback.message:
-        await callback.message.edit_text(f"🌐 {t(lang, 'language')}", reply_markup=language_keyboard())
+        await open_settings(callback.message, session, db_user, edit=True)
 
 
 @router.callback_query(F.data == "set:interval")

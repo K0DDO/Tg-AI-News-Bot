@@ -30,6 +30,8 @@ class AdminAuthStates(StatesGroup):
     menu = State()
     find_user = State()
     appoint_admin = State()
+    change_password = State()
+    confirm_change_password = State()
 
 
 class TimezoneStates(StatesGroup):

@@ -100,6 +100,35 @@ class PreferencesService:
         s = await self.get_or_create(user)
         return s.news_language or s.language or "ru"
 
+    async def soft_reset_user(self, user: User) -> dict[str, int]:
+        """
+        Make the user look 'new' for onboarding/testing:
+        - reset settings flags (welcome/tutorial/language_chosen)
+        - clear read/history/favorites (UserEventState) and reactions
+        - KEEP UserChannel links (sources stay)
+        """
+        from app.models import Reaction
+
+        settings = await self.get_or_create(user)
+        settings.welcome_seen = False
+        settings.tutorial_seen = False
+        settings.language_chosen = False
+        settings.language = "ru"
+        settings.news_language = "ru"
+        settings.digest_chat_id = None
+        settings.digest_message_id = None
+        settings.last_digest_sent_at = None
+
+        st = await self._session.execute(
+            delete(UserEventState).where(UserEventState.user_id == user.id)
+        )
+        rx = await self._session.execute(delete(Reaction).where(Reaction.user_id == user.id))
+        await self._session.commit()
+        return {
+            "states": int(st.rowcount or 0),
+            "reactions": int(rx.rowcount or 0),
+        }
+
     async def mark_welcome_seen(self, user: User) -> None:
         settings = await self.get_or_create(user)
         settings.welcome_seen = True
