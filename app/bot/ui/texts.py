@@ -59,6 +59,7 @@ def format_home(
     news: int | None = None,
     avg_importance: float | None = None,
     last_update: datetime | None = None,
+    tz_name: str | None = None,
     read: int = 0,
     saved: int = 0,
     liked: int = 0,
@@ -68,7 +69,13 @@ def format_home(
     else:
         if last_update.tzinfo is None:
             last_update = last_update.replace(tzinfo=timezone.utc)
-        updated = last_update.astimezone().strftime("%d.%m %H:%M")
+        try:
+            from zoneinfo import ZoneInfo
+
+            zone = ZoneInfo(tz_name or "Europe/Moscow")
+        except Exception:
+            zone = timezone.utc
+        updated = last_update.astimezone(zone).strftime("%d.%m %H:%M")
     lines = [
         f"<b>🍓 {t(lang, 'brand')}</b>",
         "",

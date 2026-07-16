@@ -140,10 +140,19 @@ async def send_home(message: Message, session: AsyncSession, user: User) -> None
         return
 
     stats = await prefs.user_stats(user)
-    last = await session.scalar(select(func.max(Event.updated_at)))
+    from app.health import last_ingest_at
+    from app.models import Message as TgMessage
+
+    last = last_ingest_at()
+    if last is None:
+        # Fallback after restart: latest parsed Telegram post / event touch
+        last = await session.scalar(select(func.max(TgMessage.created_at)))
+        if last is None:
+            last = await session.scalar(select(func.max(Event.updated_at)))
     text = format_home(
         lang,
         last_update=last,
+        tz_name=settings.timezone or "Europe/Moscow",
         read=stats["read"],
         saved=stats["saved"],
         liked=stats["liked"],
