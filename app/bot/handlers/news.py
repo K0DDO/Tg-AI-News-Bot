@@ -75,6 +75,7 @@ async def open_feed(
         from app.bot.keyboards import empty_feed_keyboard
         from app.models import UserChannel
 
+        await prefs.clear_digest_message(user)
         n_ch = await session.scalar(
             select(func.count()).select_from(UserChannel).where(
                 UserChannel.user_id == user.id,
@@ -120,7 +121,9 @@ async def open_feed(
     if edit and getattr(target, "message_id", None):
         try:
             await target.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
-            await prefs.save_digest_message(user, target.chat.id, target.message_id)
+            await prefs.save_digest_message(
+                user, target.chat.id, target.message_id, event_ids=ids
+            )
             return
         except TelegramBadRequest:
             pass
@@ -128,7 +131,7 @@ async def open_feed(
     # Always send a NEW message when opening feed from menu/command.
     # Editing an old digest far up the chat looks like "nothing happened".
     sent = await target.answer(text, reply_markup=kb, disable_web_page_preview=True)
-    await prefs.save_digest_message(user, sent.chat.id, sent.message_id)
+    await prefs.save_digest_message(user, sent.chat.id, sent.message_id, event_ids=ids)
 
 
 @router.message(Command("digest", "daily", "news", "feed"))

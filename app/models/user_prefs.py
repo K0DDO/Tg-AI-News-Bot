@@ -53,6 +53,7 @@ class UserSettings(Base):
     ignored_topics: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
     digest_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     digest_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    digest_feed_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     # Product upgrade fields
     timezone: Mapped[str] = mapped_column(

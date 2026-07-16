@@ -15,6 +15,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
 )
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.keyboards.reply import main_menu
@@ -98,6 +99,48 @@ async def _safe_delete(message: Message | None) -> None:
         pass
 
 
+async def _track(state: FSMContext, *messages: Message | None) -> None:
+    """Remember bot/user messages created during the admin session."""
+    data = await state.get_data()
+    ids: list[int] = list(data.get("admin_msg_ids") or [])
+    for msg in messages:
+        if msg is None:
+            continue
+        mid = getattr(msg, "message_id", None)
+        if mid is not None and int(mid) not in ids:
+            ids.append(int(mid))
+    await state.update_data(admin_msg_ids=ids)
+
+
+async def _admin_answer(
+    message: Message,
+    state: FSMContext,
+    text: str,
+    **kwargs,
+) -> Message:
+    """Send a message and track both the user trigger and the bot reply."""
+    await _track(state, message)
+    sent = await message.answer(text, **kwargs)
+    await _track(state, sent)
+    return sent
+
+
+async def _purge_admin_messages(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    ids: list[int] = list(data.get("admin_msg_ids") or [])
+    await _track(state, message)
+    data = await state.get_data()
+    ids = list(data.get("admin_msg_ids") or [])
+    chat_id = message.chat.id if message.chat else None
+    if chat_id is None:
+        return
+    for mid in ids:
+        try:
+            await message.bot.delete_message(chat_id, mid)
+        except Exception:
+            pass
+
+
 @router.message(Command("admin"))
 async def cmd_admin(
     message: Message,
@@ -123,7 +166,7 @@ async def cmd_admin(
             "Создайте пароль для админ-панели (минимум 6 символов):",
             reply_markup=ReplyKeyboardRemove(),
         )
-        await state.update_data(prompt_id=prompt.message_id)
+        await state.update_data(admin_msg_ids=[prompt.message_id])
         return
 
     await state.set_state(AdminAuthStates.enter_password)
@@ -131,19 +174,20 @@ async def cmd_admin(
         "Введите пароль админ-панели:",
         reply_markup=ReplyKeyboardRemove(),
     )
-    await state.update_data(prompt_id=prompt.message_id)
+    await state.update_data(admin_msg_ids=[prompt.message_id])
 
 
 @router.message(AdminAuthStates.create_password)
 async def admin_create_password(message: Message, state: FSMContext) -> None:
     pwd = (message.text or "").strip()
+    await _track(state, message)
     await _safe_delete(message)
     if len(pwd) < 6:
-        await message.answer("Пароль слишком короткий. Минимум 6 символов:")
+        await _admin_answer(message, state, "Пароль слишком короткий. Минимум 6 символов:")
         return
     await state.update_data(new_password=pwd)
     await state.set_state(AdminAuthStates.confirm_password)
-    await message.answer("Повторите пароль:")
+    await _admin_answer(message, state, "Повторите пароль:")
 
 
 @router.message(AdminAuthStates.confirm_password)
@@ -155,16 +199,17 @@ async def admin_confirm_password(
 ) -> None:
     data = await state.get_data()
     pwd = data.get("new_password") or ""
+    await _track(state, message)
     await _safe_delete(message)
     if (message.text or "").strip() != pwd:
         await state.set_state(AdminAuthStates.create_password)
-        await message.answer("Пароли не совпали. Введите новый пароль:")
+        await _admin_answer(message, state, "Пароли не совпали. Введите новый пароль:")
         return
     svc = AdminService(session)
     await svc.set_password(db_user, pwd)
     await state.set_state(AdminAuthStates.menu)
     await state.update_data(admin_ok=True, new_password=None)
-    await message.answer("🛠 Админ-меню:", reply_markup=admin_menu_keyboard())
+    await _admin_answer(message, state, "🛠 Админ-меню:", reply_markup=admin_menu_keyboard())
     record_admin_log("INFO", f"Admin login uid={db_user.id}")
 
 
@@ -177,23 +222,17 @@ async def admin_enter_password(
 ) -> None:
     svc = AdminService(session)
     acc = await svc.get_account(db_user.id)
-    data = await state.get_data()
-    prompt_id = data.get("prompt_id")
     pwd_ok = acc and verify_password(message.text or "", acc.password_hash)
+    await _track(state, message)
     await _safe_delete(message)
-    if prompt_id and message.chat:
-        try:
-            await message.bot.delete_message(message.chat.id, int(prompt_id))
-        except Exception:
-            pass
     if not pwd_ok:
-        await message.answer("Неверный пароль. Попробуйте ещё раз или /admin")
+        await _admin_answer(message, state, "Неверный пароль. Попробуйте ещё раз или /admin")
         return
+    # Drop password prompt + typed password from chat
+    await _purge_admin_messages(message, state)
     await state.set_state(AdminAuthStates.menu)
-    await state.update_data(admin_ok=True)
-    accepted = await message.answer("Пароль принят.")
-    await _safe_delete(accepted)
-    await message.answer("🛠 Админ-меню:", reply_markup=admin_menu_keyboard())
+    await state.update_data(admin_ok=True, admin_msg_ids=[])
+    await _admin_answer(message, state, "🛠 Админ-меню:", reply_markup=admin_menu_keyboard())
     record_admin_log("INFO", f"Admin login uid={db_user.id}")
 
 
@@ -204,6 +243,7 @@ async def admin_exit(
     db_user: User,
     state: FSMContext,
 ) -> None:
+    await _purge_admin_messages(message, state)
     await state.clear()
     lang = await PreferencesService(session).lang(db_user)
     await message.answer("Вышли из админ-панели.", reply_markup=main_menu(lang))
@@ -227,7 +267,7 @@ async def admin_stats(message: Message, session: AsyncSession, state: FSMContext
         f"🤖 <b>AI запросы</b>\n"
         f"Обращений: <b>{stats['ai_requests']}</b>"
     )
-    await message.answer(text)
+    await _admin_answer(message, state, text)
 
 
 @router.message(AdminAuthStates.menu, F.text == BTN_LOGS)
@@ -249,7 +289,7 @@ async def admin_logs_view(message: Message, state: FSMContext) -> None:
             lines.append(f"INFO: {r['message']}")
     else:
         lines.append("— нет")
-    await message.answer("\n".join(lines))
+    await _admin_answer(message, state, "\n".join(lines))
 
 
 @router.message(AdminAuthStates.menu, F.text == BTN_DIAG)
@@ -277,7 +317,7 @@ async def admin_diag(message: Message, session: AsyncSession, state: FSMContext)
         text += f"{errs[0]}"
     else:
         text += "нет"
-    await message.answer(text)
+    await _admin_answer(message, state, text)
 
 
 @router.message(AdminAuthStates.menu, F.text == BTN_USERS)
@@ -302,7 +342,9 @@ async def admin_users_start(message: Message, session: AsyncSession, state: FSMC
     )
     await state.set_state(AdminAuthStates.find_user)
     await state.update_data(admin_ok=True)
-    await message.answer(
+    await _admin_answer(
+        message,
+        state,
         "\n".join(lines),
         reply_markup=ReplyKeyboardMarkup(
             keyboard=[[KeyboardButton(text=BTN_CANCEL)]],
@@ -315,7 +357,7 @@ async def admin_users_start(message: Message, session: AsyncSession, state: FSMC
 async def admin_users_cancel(message: Message, state: FSMContext) -> None:
     await state.set_state(AdminAuthStates.menu)
     await state.update_data(admin_ok=True)
-    await message.answer("🛠 Админ-меню:", reply_markup=admin_menu_keyboard())
+    await _admin_answer(message, state, "🛠 Админ-меню:", reply_markup=admin_menu_keyboard())
 
 
 @router.message(AdminAuthStates.find_user)
@@ -325,9 +367,11 @@ async def admin_users_find(message: Message, session: AsyncSession, state: FSMCo
     svc = AdminService(session)
     target = await svc.find_user(message.text or "")
     if not target:
-        await message.answer("Не найден. Пришлите ID / @username или «Отмена».")
+        await _admin_answer(message, state, "Не найден. Пришлите ID / @username или «Отмена».")
         return
-    await message.answer(
+    await _admin_answer(
+        message,
+        state,
         _user_card(target),
         reply_markup=_user_actions_kb(target.id, is_banned=bool(target.is_banned)),
     )
@@ -338,8 +382,6 @@ async def admin_ban(callback: CallbackQuery, session: AsyncSession, state: FSMCo
     if not await _require_session(state):
         await callback.answer("Сначала /admin", show_alert=True)
         return
-    from sqlalchemy import select
-
     uid = int((callback.data or "").split(":")[2])
     svc = AdminService(session)
     target = (await session.execute(select(User).where(User.id == uid))).scalar_one_or_none()
@@ -350,6 +392,7 @@ async def admin_ban(callback: CallbackQuery, session: AsyncSession, state: FSMCo
     record_admin_log("INFO", f"Banned user id={uid}")
     await callback.answer("Забанен")
     if callback.message:
+        await _track(state, callback.message)
         await callback.message.edit_text(
             _user_card(target),
             reply_markup=_user_actions_kb(target.id, is_banned=True),
@@ -362,8 +405,6 @@ async def admin_unban(callback: CallbackQuery, session: AsyncSession, state: FSM
         await callback.answer("Сначала /admin", show_alert=True)
         return
     uid = int((callback.data or "").split(":")[2])
-    from sqlalchemy import select
-
     svc = AdminService(session)
     target = (await session.execute(select(User).where(User.id == uid))).scalar_one_or_none()
     if not target:
@@ -373,6 +414,7 @@ async def admin_unban(callback: CallbackQuery, session: AsyncSession, state: FSM
     record_admin_log("INFO", f"Unbanned user id={uid}")
     await callback.answer("Разбанен")
     if callback.message:
+        await _track(state, callback.message)
         await callback.message.edit_text(
             _user_card(target),
             reply_markup=_user_actions_kb(target.id, is_banned=False),
@@ -385,8 +427,6 @@ async def admin_soft_reset(callback: CallbackQuery, session: AsyncSession, state
         await callback.answer("Сначала /admin", show_alert=True)
         return
     uid = int((callback.data or "").split(":")[2])
-    from sqlalchemy import select
-
     svc = AdminService(session)
     target = (await session.execute(select(User).where(User.id == uid))).scalar_one_or_none()
     if not target:
@@ -399,6 +439,7 @@ async def admin_soft_reset(callback: CallbackQuery, session: AsyncSession, state
     )
     await callback.answer("Сброшен как новый", show_alert=True)
     if callback.message:
+        await _track(state, callback.message)
         await callback.message.edit_text(
             _user_card(target)
             + "\n\n🔄 Сброшен: онбординг заново, история/избранное очищены.\n"
@@ -414,7 +455,9 @@ async def admin_change_password_start(message: Message, state: FSMContext) -> No
         return
     await state.set_state(AdminAuthStates.change_password)
     await state.update_data(admin_ok=True)
-    await message.answer(
+    await _admin_answer(
+        message,
+        state,
         "Введите новый пароль админки (минимум 6 символов):\n"
         f"Или «{BTN_CANCEL}».",
         reply_markup=ReplyKeyboardMarkup(
@@ -429,19 +472,20 @@ async def admin_change_password_start(message: Message, state: FSMContext) -> No
 async def admin_change_password_cancel(message: Message, state: FSMContext) -> None:
     await state.set_state(AdminAuthStates.menu)
     await state.update_data(admin_ok=True, new_password=None)
-    await message.answer("Отменено.", reply_markup=admin_menu_keyboard())
+    await _admin_answer(message, state, "Отменено.", reply_markup=admin_menu_keyboard())
 
 
 @router.message(AdminAuthStates.change_password)
 async def admin_change_password_enter(message: Message, state: FSMContext) -> None:
     pwd = (message.text or "").strip()
+    await _track(state, message)
     await _safe_delete(message)
     if len(pwd) < 6:
-        await message.answer("Пароль слишком короткий. Минимум 6 символов:")
+        await _admin_answer(message, state, "Пароль слишком короткий. Минимум 6 символов:")
         return
     await state.update_data(new_password=pwd)
     await state.set_state(AdminAuthStates.confirm_change_password)
-    await message.answer("Повторите новый пароль:")
+    await _admin_answer(message, state, "Повторите новый пароль:")
 
 
 @router.message(AdminAuthStates.confirm_change_password)
@@ -453,20 +497,23 @@ async def admin_change_password_confirm(
 ) -> None:
     data = await state.get_data()
     pwd = data.get("new_password") or ""
+    await _track(state, message)
     await _safe_delete(message)
     if (message.text or "").strip() != pwd:
         await state.set_state(AdminAuthStates.change_password)
-        await message.answer("Пароли не совпали. Введите новый пароль:")
+        await _admin_answer(message, state, "Пароли не совпали. Введите новый пароль:")
         return
     await AdminService(session).set_password(db_user, pwd)
     await state.set_state(AdminAuthStates.menu)
     await state.update_data(admin_ok=True, new_password=None)
     record_admin_log("INFO", f"Admin password changed uid={db_user.id}")
-    await message.answer("🔑 Пароль обновлён.", reply_markup=admin_menu_keyboard())
+    await _admin_answer(message, state, "🔑 Пароль обновлён.", reply_markup=admin_menu_keyboard())
 
 
 @router.message(StateFilter(AdminAuthStates.menu))
-async def admin_menu_fallback(message: Message) -> None:
-    await message.answer(
-        "Выберите: Статистика · Пользователи · Логи · Диагностика · Пароль · Выйти"
+async def admin_menu_fallback(message: Message, state: FSMContext) -> None:
+    await _admin_answer(
+        message,
+        state,
+        "Выберите: Статистика · Пользователи · Логи · Диагностика · Пароль · Выйти",
     )

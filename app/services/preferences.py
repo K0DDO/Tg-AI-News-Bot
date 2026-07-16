@@ -117,6 +117,7 @@ class PreferencesService:
         settings.news_language = "ru"
         settings.digest_chat_id = None
         settings.digest_message_id = None
+        settings.digest_feed_ids = None
         settings.last_digest_sent_at = None
 
         st = await self._session.execute(
@@ -152,11 +153,43 @@ class PreferencesService:
         await self._session.commit()
         return settings
 
-    async def save_digest_message(self, user: User, chat_id: int, message_id: int) -> None:
+    async def save_digest_message(
+        self,
+        user: User,
+        chat_id: int,
+        message_id: int,
+        *,
+        event_ids: list[int] | None = None,
+    ) -> None:
         settings = await self.get_or_create(user)
         settings.digest_chat_id = chat_id
         settings.digest_message_id = message_id
+        if event_ids is not None:
+            settings.digest_feed_ids = [int(x) for x in event_ids]
         await self._session.commit()
+
+    async def clear_digest_message(self, user: User) -> None:
+        settings = await self.get_or_create(user)
+        settings.digest_chat_id = None
+        settings.digest_message_id = None
+        settings.digest_feed_ids = None
+        await self._session.commit()
+
+    async def digest_feed_still_unread(self, user: User) -> bool:
+        """True if previous pushed feed still has unread items (user hasn't finished it)."""
+        settings = await self.get_or_create(user)
+        ids = [int(x) for x in (settings.digest_feed_ids or []) if x]
+        if not ids:
+            return bool(settings.digest_message_id)
+        result = await self._session.execute(
+            select(UserEventState).where(
+                UserEventState.user_id == user.id,
+                UserEventState.event_id.in_(ids),
+                UserEventState.is_read.is_(True),
+            )
+        )
+        read_ids = {s.event_id for s in result.scalars().all()}
+        return any(eid not in read_ids for eid in ids)
 
     async def set_interval(self, user: User, minutes: int) -> UserSettings:
         settings = await self.get_or_create(user)
