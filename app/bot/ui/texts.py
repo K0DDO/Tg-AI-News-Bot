@@ -70,7 +70,7 @@ def format_home(
             last_update = last_update.replace(tzinfo=timezone.utc)
         updated = last_update.astimezone().strftime("%d.%m %H:%M")
     lines = [
-        f"<b>📰 {t(lang, 'brand')}</b>",
+        f"<b>🍓 {t(lang, 'brand')}</b>",
         "",
         t(lang, "welcome"),
         "",
@@ -423,18 +423,17 @@ def format_settings(lang: str, settings) -> str:
 
 
 def format_how_to_use(lang: str) -> str:
-    return f"<b>📖 {t(lang, 'how_to_use')}</b>\n\n{t(lang, 'onb_icons_b')}"
+    return t(lang, "howto_body")
 
 
 def format_about(lang: str) -> str:
     return f"<b>ℹ️ {t(lang, 'about')}</b>\n\n{t(lang, 'about_body')}"
 
 
-
 def format_privacy(lang: str) -> str:
     if lang == "en":
         return (
-            "<b>🔒 Privacy</b>\n\n"
+            "<b>🔒 Privacy policy</b>\n\n"
             "We store: Telegram ID, channels, reactions, reading history, settings.\n"
             "Used only to personalize your feed. Not sold to third parties.\n"
             "Reset reactions in Settings; full deletion on request."
@@ -448,11 +447,12 @@ def format_privacy(lang: str) -> str:
 
 
 def onboarding_steps(lang: str) -> list[tuple[str, str]]:
+    """Legacy helper — tour keys live in home.onboarding now."""
     return [
-        (t(lang, "onb_icons_t"), t(lang, "onb_icons_b")),
-        (t(lang, "onb_1_t"), t(lang, "onb_1_b")),
-        (t(lang, "onb_2_t"), t(lang, "onb_2_b")),
-        (t(lang, "onb_3_t"), t(lang, "onb_3_b")),
-        (t(lang, "onb_4_t"), t(lang, "onb_4_b")),
-        (t(lang, "onb_done_t"), t(lang, "onb_done_b")),
+        (t(lang, "ob_tour1_t"), t(lang, "ob_tour1_b")),
+        (t(lang, "ob_tour2_t"), t(lang, "ob_tour2_b")),
+        (t(lang, "ob_tour3_t"), t(lang, "ob_tour3_b")),
+        (t(lang, "ob_tour4_t"), t(lang, "ob_tour4_b")),
+        (t(lang, "ob_tour5_t"), t(lang, "ob_tour5_b")),
+        (t(lang, "ob_tour_done_t"), t(lang, "ob_tour_done_b")),
     ]

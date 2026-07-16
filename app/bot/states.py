@@ -13,6 +13,12 @@ class ChannelBulkStates(StatesGroup):
     waiting_list = State()
 
 
+class OnboardingStates(StatesGroup):
+    """Multi-step first-run setup."""
+
+    waiting_channels = State()
+
+
 class IgnoreTopicsStates(StatesGroup):
     waiting_topics = State()
 

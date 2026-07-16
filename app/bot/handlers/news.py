@@ -9,7 +9,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.i18n import t
-from app.bot.keyboards import add_channels_keyboard, detail_keyboard, feed_keyboard, sources_keyboard
+from app.bot.keyboards import detail_keyboard, feed_keyboard, sources_keyboard
 from app.bot.ui import format_feed, format_news_detail, format_sources_screen
 from app.models import User
 from app.services.digest import NewsService
@@ -71,6 +71,8 @@ async def open_feed(
     if not items and offset == 0:
         from sqlalchemy import func, select
 
+        from app.bot.brand import send_banner
+        from app.bot.keyboards import empty_feed_keyboard
         from app.models import UserChannel
 
         n_ch = await session.scalar(
@@ -80,17 +82,32 @@ async def open_feed(
             )
         )
         if not n_ch:
-            text = f"📂 {t(lang, 'no_channels_feed')}"
-            kb = add_channels_keyboard(lang)
+            caption = (
+                f"<b>🍓 {t(lang, 'no_more_news')}</b>\n\n"
+                f"{t(lang, 'no_channels_feed')}"
+            )
+            kb = empty_feed_keyboard(lang)
             if edit and getattr(target, "message_id", None):
                 try:
-                    await target.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
+                    await target.edit_text(caption, reply_markup=kb, disable_web_page_preview=True)
                     return
                 except TelegramBadRequest:
                     pass
-            await target.answer(text, reply_markup=kb, disable_web_page_preview=True)
+            await send_banner(target, caption, reply_markup=kb, occasion="empty")
             return
-        text = t(lang, "no_more_news")
+        caption = (
+            f"<b>🍓 {t(lang, 'no_more_news')}</b>\n\n"
+            f"{t(lang, 'empty_feed_body')}"
+        )
+        kb = empty_feed_keyboard(lang)
+        if edit and getattr(target, "message_id", None):
+            try:
+                await target.edit_text(caption, reply_markup=kb, disable_web_page_preview=True)
+                return
+            except TelegramBadRequest:
+                pass
+        await send_banner(target, caption, reply_markup=kb, occasion="empty")
+        return
     elif not items:
         text = t(lang, "no_more_news")
     else:

@@ -7,29 +7,115 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from app.bot.i18n import LANG_LABELS, SUPPORTED_LANGS, t
 
 
+def language_keyboard(*, prefix: str = "lang") -> InlineKeyboardMarkup:
+    flags = {
+        "ru": "🇷🇺 Русский",
+        "en": "🇬🇧 English",
+        "de": "🇩🇪 Deutsch",
+        "es": "🇪🇸 Español",
+    }
+    rows = []
+    for code in SUPPORTED_LANGS:
+        rows.append(
+            [InlineKeyboardButton(text=flags.get(code, LANG_LABELS[code]), callback_data=f"{prefix}:{code}")]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def onboarding_start_keyboard(lang: str = "ru") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"🍓 {t(lang, 'ob_start_btn')}", callback_data="ob:begin")]
+        ]
+    )
+
+
+def privacy_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"✅ {t(lang, 'ob_privacy_ok')}", callback_data="ob:privacy_ok")],
+            [
+                InlineKeyboardButton(
+                    text=f"📜 {t(lang, 'privacy')}",
+                    callback_data="ob:privacy_full",
+                )
+            ],
+        ]
+    )
+
+
+def onboarding_channels_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"📡 {t(lang, 'ob_add_channels')}", callback_data="ob:add_ch")],
+            [InlineKeyboardButton(text=f"⏭ {t(lang, 'ob_later')}", callback_data="ob:skip_ch")],
+        ]
+    )
+
+
+def onboarding_while_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"⚙️ {t(lang, 'ob_configure')}", callback_data="ob:configure")],
+            [InlineKeyboardButton(text=f"📖 {t(lang, 'ob_tour')}", callback_data="ob:tour:0")],
+            [InlineKeyboardButton(text=f"⏭ {t(lang, 'ob_skip')}", callback_data="ob:finish")],
+        ]
+    )
+
+
+def onboarding_tour_keyboard(lang: str, step: int, total: int) -> InlineKeyboardMarkup:
+    if step >= total - 1:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=f"🍓 {t(lang, 'ob_tour_done_btn')}", callback_data="ob:finish")]
+            ]
+        )
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"➡️ {t(lang, 'next')}", callback_data=f"ob:tour:{step + 1}")]
+        ]
+    )
+
+
+def onboarding_done_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=f"📰 {t(lang, 'feed')}", callback_data="nav:news"),
+                InlineKeyboardButton(text=f"⚙️ {t(lang, 'settings')}", callback_data="nav:settings"),
+            ]
+        ]
+    )
+
+
+def empty_feed_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"🔎 {t(lang, 'search')}", callback_data="nav:search")],
+            [InlineKeyboardButton(text=f"📡 {t(lang, 'ob_add_channels')}", callback_data="ch:bulk")],
+            [InlineKeyboardButton(text=f"🔥 {t(lang, 'trends')}", callback_data="nav:trends")],
+        ]
+    )
+
+
+def how_to_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"🏠 {t(lang, 'back_home')}", callback_data="nav:home")],
+        ]
+    )
+
+
 def home_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=f"📖 {t(lang, 'how_to')}", callback_data="onb:0")],
+            [InlineKeyboardButton(text=f"📖 {t(lang, 'how_to_use')}", callback_data="nav:howto")],
             [
                 InlineKeyboardButton(text=f"📰 {t(lang, 'feed')}", callback_data="nav:news"),
                 InlineKeyboardButton(text=f"🔥 {t(lang, 'trends')}", callback_data="nav:trends"),
             ],
         ]
     )
-
-
-def language_keyboard(*, prefix: str = "lang") -> InlineKeyboardMarkup:
-    rows = []
-    row: list[InlineKeyboardButton] = []
-    for code in SUPPORTED_LANGS:
-        row.append(InlineKeyboardButton(text=LANG_LABELS[code], callback_data=f"{prefix}:{code}"))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def add_channels_keyboard(lang: str) -> InlineKeyboardMarkup:
@@ -326,7 +412,7 @@ def settings_personal_keyboard(lang: str) -> InlineKeyboardMarkup:
 def settings_info_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=f"📖 {t(lang, 'how_to_use')}", callback_data="onb:0")],
+            [InlineKeyboardButton(text=f"📖 {t(lang, 'how_to_use')}", callback_data="nav:howto")],
             [InlineKeyboardButton(text=f"🔒 {t(lang, 'privacy')}", callback_data="set:privacy")],
             [InlineKeyboardButton(text=f"ℹ️ {t(lang, 'about')}", callback_data="set:about")],
             [InlineKeyboardButton(text=f"🔙 {t(lang, 'back')}", callback_data="set:back")],

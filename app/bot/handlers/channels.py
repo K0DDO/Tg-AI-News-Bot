@@ -56,11 +56,22 @@ async def bulk_start(callback: CallbackQuery, state: FSMContext, session: AsyncS
 @router.message(ChannelBulkStates.waiting_list)
 async def bulk_import(message: Message, session: AsyncSession, db_user: User, state: FSMContext) -> None:
     lang = await PreferencesService(session).lang(db_user)
+    data = await state.get_data()
+    from_onboarding = bool(data.get("onboarding"))
     await state.clear()
     refs = parse_channel_refs(message.text or "")
     if not refs:
         await message.answer(t(lang, "ch_parse_fail"))
         return
+
+    total = len(refs)
+    progress = await message.answer(
+        f"<b>📡 {t(lang, 'ob_connect_title')}</b>\n\n"
+        f"{t(lang, 'ob_connect_check')}\n"
+        f"<code>{'░' * 10}</code> <b>0%</b>\n\n"
+        f"{t(lang, 'ob_connect_found', n=total)}\n"
+        f"{t(lang, 'ob_connect_process', done=0, total=total)}"
+    )
 
     service = ChannelService(session)
     added = 0
@@ -68,9 +79,8 @@ async def bulk_import(message: Message, session: AsyncSession, db_user: User, st
     errors: list[tuple[str, str]] = []
     added_ids: list[int] = []
 
-    for username in refs:
+    for i, username in enumerate(refs, start=1):
         try:
-            # Already linked?
             existing_ch = await session.scalar(
                 select(Channel).where(Channel.username == username)
             )
@@ -91,7 +101,6 @@ async def bulk_import(message: Message, session: AsyncSession, db_user: User, st
                 errors.append((username, t(lang, "ch_err_not_channel")))
                 continue
 
-            # Re-check by telegram_id
             by_tid = await session.scalar(
                 select(Channel).where(Channel.telegram_id == chat.id)
             )
@@ -122,6 +131,20 @@ async def bulk_import(message: Message, session: AsyncSession, db_user: User, st
         except Exception:
             errors.append((username, t(lang, "ch_err_generic")))
 
+        pct = int(i * 100 / total)
+        filled = int(round(10 * pct / 100))
+        bar = "█" * filled + "░" * (10 - filled)
+        try:
+            await progress.edit_text(
+                f"<b>📡 {t(lang, 'ob_connect_title')}</b>\n\n"
+                f"{t(lang, 'ob_connect_check')}\n"
+                f"<code>{bar}</code> <b>{pct}%</b>\n\n"
+                f"{t(lang, 'ob_connect_found', n=total)}\n"
+                f"{t(lang, 'ob_connect_process', done=i, total=total)}"
+            )
+        except TelegramBadRequest:
+            pass
+
     job = None
     if added_ids:
         job = await service.create_backfill_job(db_user.id, days=2, channel_ids=added_ids)
@@ -129,22 +152,28 @@ async def bulk_import(message: Message, session: AsyncSession, db_user: User, st
         if job:
             await session.refresh(job)
 
-    lines = [
-        f"<b>📡 {t(lang, 'ch_add_result_title')}</b>",
-        "",
-        f"✅ {t(lang, 'ch_added')}: <b>{added}</b>",
-        f"⚠️ {t(lang, 'ch_exists')}: <b>{exists}</b>",
-        f"❌ {t(lang, 'ch_errors')}: <b>{len(errors)}</b>",
-    ]
-    if errors:
-        lines.append("")
+    try:
+        await progress.edit_text(
+            f"<b>🍓 {t(lang, 'ob_sources_ready')}</b>\n\n"
+            f"{t(lang, 'ob_sources_linked')}\n"
+            f"📡 {t(lang, 'channels')}: <b>{added}</b>\n"
+            f"⚠️ {t(lang, 'ch_exists')}: <b>{exists}</b>\n"
+            f"❌ {t(lang, 'ch_errors')}: <b>{len(errors)}</b>\n\n"
+            f"{t(lang, 'ob_sources_collect')}"
+        )
+    except TelegramBadRequest:
+        await message.answer(
+            f"<b>🍓 {t(lang, 'ob_sources_ready')}</b>\n\n"
+            f"📡 {added} · ⚠️ {exists} · ❌ {len(errors)}"
+        )
+
+    if errors and not from_onboarding:
+        lines = [f"<b>📡 {t(lang, 'ch_add_result_title')}</b>", ""]
         for uname, reason in errors[:8]:
             lines.append(f"• @{uname} — {reason}")
-        if len(errors) > 8:
-            lines.append(f"… +{len(errors) - 8}")
         lines.append("")
         lines.append(t(lang, "ch_err_hint"))
-    await message.answer("\n".join(lines))
+        await message.answer("\n".join(lines))
 
     if job:
         from app.bot.handlers.backfill_watch import start_backfill_watch
@@ -159,7 +188,13 @@ async def bulk_import(message: Message, session: AsyncSession, db_user: User, st
         job.message_id = prog.message_id
         await session.commit()
         start_backfill_watch(message.bot, job.id, lang)
-    await _show_list(message, session, db_user, edit=False)
+
+    if from_onboarding:
+        from app.bot.handlers.home import show_while_preparing
+
+        await show_while_preparing(message, lang)
+    else:
+        await _show_list(message, session, db_user, edit=False)
 
 
 @router.callback_query(F.data == "ch:list")
