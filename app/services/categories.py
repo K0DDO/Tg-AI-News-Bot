@@ -1,4 +1,4 @@
-"""Fixed theme taxonomy (10 themes) + heuristic classifier.
+"""Fixed theme taxonomy + heuristic classifier.
 
 Event.category stores theme keys. UI shows emoji labels as «Темы».
 Legacy category names are normalized via CATEGORY_ALIASES / LEGACY_THEME_MAP.
@@ -20,6 +20,8 @@ THEME_CRYPTO = "crypto"
 THEME_SPORT = "sport"
 THEME_SECURITY = "security"
 THEME_MEDIA = "media"
+THEME_POLITICS = "politics"
+THEME_OTHER = "other"
 
 ALLOWED_CATEGORIES = (
     THEME_AI_SOFTWARE,
@@ -32,12 +34,32 @@ ALLOWED_CATEGORIES = (
     THEME_SPORT,
     THEME_SECURITY,
     THEME_MEDIA,
+    THEME_POLITICS,
+    THEME_OTHER,
+)
+
+# Themes that existed before politics/other — used to auto-enable new ones
+_LEGACY_FULL_THEMES = frozenset(
+    {
+        THEME_AI_SOFTWARE,
+        THEME_TECHNOLOGY,
+        THEME_MOBILE,
+        THEME_GAMING,
+        THEME_SCIENCE_SPACE,
+        THEME_BUSINESS,
+        THEME_CRYPTO,
+        THEME_SPORT,
+        THEME_SECURITY,
+        THEME_MEDIA,
+    }
 )
 
 DEFAULT_CATEGORIES = list(ALLOWED_CATEGORIES)
 
 # Short themes → 2 per keyboard row; long → 1 per row
-THEME_LAYOUT_LONG = frozenset({THEME_AI_SOFTWARE, THEME_SCIENCE_SPACE, THEME_BUSINESS})
+THEME_LAYOUT_LONG = frozenset(
+    {THEME_AI_SOFTWARE, THEME_SCIENCE_SPACE, THEME_BUSINESS, THEME_POLITICS}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +84,8 @@ THEMES: dict[str, ThemeMeta] = {
     THEME_SPORT: ThemeMeta(THEME_SPORT, "🏆", "Sport"),
     THEME_SECURITY: ThemeMeta(THEME_SECURITY, "🔐", "Security"),
     THEME_MEDIA: ThemeMeta(THEME_MEDIA, "🎬", "Media"),
+    THEME_POLITICS: ThemeMeta(THEME_POLITICS, "🏛", "Politics"),
+    THEME_OTHER: ThemeMeta(THEME_OTHER, "📦", "Other"),
 }
 
 # Legacy → new theme keys
@@ -78,18 +102,21 @@ LEGACY_THEME_MAP: dict[str, str] = {
     "Security": THEME_SECURITY,
     "Gaming": THEME_GAMING,
     "Entertainment": THEME_MEDIA,
-    "Politics": THEME_BUSINESS,
+    "Politics": THEME_POLITICS,
     "Health": THEME_SCIENCE_SPACE,
-    "Other": THEME_TECHNOLOGY,
-    "General": THEME_TECHNOLOGY,
+    "Other": THEME_OTHER,
+    "General": THEME_OTHER,
 }
 
 CATEGORY_ALIASES = {
     **LEGACY_THEME_MAP,
     "Tech": THEME_TECHNOLOGY,
     "ИИ": THEME_AI_SOFTWARE,
-    "Политика": THEME_BUSINESS,
-    "Politics & Society": THEME_BUSINESS,
+    "Политика": THEME_POLITICS,
+    "Politics & Society": THEME_POLITICS,
+    "Другое": THEME_OTHER,
+    "Misc": THEME_OTHER,
+    "Unknown": THEME_OTHER,
 }
 
 # Channel promo footers must not drive theme.
@@ -186,9 +213,19 @@ _CATEGORY_RULES: list[tuple[re.Pattern[str], str]] = [
     ),
     (
         re.compile(
+            r"(?<![a-zа-я])(политик\w*|politics|president\w*|президент\w*|санкци\w*|"
+            r"sanction\w*|trump|путин\w*|правительств\w*|парламент\w*|госдум\w*|"
+            r"выбор\w*|election\w*|minister\w*|министр\w*|дипломат\w*|кремл\w*|"
+            r"white\s*house|нато\b|nato\b|военн\w*|войн\w*|пво\b|беспилотник\w*|"
+            r"drone\w*|missile\w*|ракет\w*|геополитик\w*)",
+            re.I,
+        ),
+        THEME_POLITICS,
+    ),
+    (
+        re.compile(
             r"(?<![a-zа-я])(startup\w*|funding|инвестиц\w*|ipo\b|акци[яи]|выручк\w*|"
-            r"revenue|экономик\w*|банк\w*|финтех\w*|layoff\w*|увольнен\w*|"
-            r"политик\w*|president\w*|президент\w*|санкци\w*|sanction\w*|trump|путин\w*)",
+            r"revenue|экономик\w*|банк\w*|финтех\w*|layoff\w*|увольнен\w*)",
             re.I,
         ),
         THEME_BUSINESS,
@@ -208,13 +245,13 @@ def theme_display(key: str | None) -> str:
     meta = THEMES.get(key or "")
     if meta:
         return meta.display
-    return key or THEME_TECHNOLOGY
+    return key or THEME_OTHER
 
 
 def normalize_category(raw: str | None) -> str:
     value = (raw or "").strip()
     if not value:
-        return THEME_TECHNOLOGY
+        return THEME_OTHER
     if value in ALLOWED_CATEGORIES:
         return value
     if value in CATEGORY_ALIASES:
@@ -225,7 +262,7 @@ def normalize_category(raw: str | None) -> str:
     # Title-case legacy like "Technology"
     if value in LEGACY_THEME_MAP:
         return LEGACY_THEME_MAP[value]
-    return THEME_TECHNOLOGY
+    return THEME_OTHER
 
 
 def guess_category(text: str) -> str:
@@ -233,7 +270,7 @@ def guess_category(text: str) -> str:
     for pattern, category in _CATEGORY_RULES:
         if pattern.search(blob):
             return category
-    return THEME_TECHNOLOGY
+    return THEME_OTHER
 
 
 def classify_event_text(
@@ -248,9 +285,14 @@ def classify_event_text(
         f"{title}\n{summary}\n{topic}",
     ):
         guessed = guess_category(blob)
-        if guessed:
+        if guessed and guessed != THEME_OTHER:
             return guessed
-    return normalize_category(current)
+        if guessed == THEME_OTHER and blob.strip():
+            # Keep scanning richer blobs; only fall through if all miss
+            continue
+    if current:
+        return normalize_category(current)
+    return THEME_OTHER
 
 
 def default_theme_weights() -> dict[str, int]:
@@ -268,4 +310,10 @@ def migrate_enabled_list(raw: list | None) -> list[str]:
         if key in ALLOWED_CATEGORIES and key not in seen:
             seen.add(key)
             out.append(key)
+    # Users who had the full pre-politics set get the new themes auto-enabled
+    if _LEGACY_FULL_THEMES <= set(out):
+        for key in (THEME_POLITICS, THEME_OTHER):
+            if key not in seen:
+                seen.add(key)
+                out.append(key)
     return out or list(DEFAULT_CATEGORIES)

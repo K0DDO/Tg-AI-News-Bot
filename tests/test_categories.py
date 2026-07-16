@@ -1,10 +1,12 @@
-"""Category taxonomy tests — 10 theme keys."""
+"""Category taxonomy tests — theme keys including politics & other."""
 
 from app.services.categories import (
     THEME_AI_SOFTWARE,
     THEME_BUSINESS,
     THEME_GAMING,
     THEME_MOBILE,
+    THEME_OTHER,
+    THEME_POLITICS,
     THEME_TECHNOLOGY,
     classify_event_text,
     guess_category,
@@ -13,13 +15,14 @@ from app.services.categories import (
 
 
 def test_politics_guess():
-    assert guess_category("Путин встретился с президентом Франции в Кремле") == THEME_BUSINESS
-    assert guess_category("New US sanctions against Russia announced by White House") == THEME_BUSINESS
+    assert guess_category("Путин встретился с президентом Франции в Кремле") == THEME_POLITICS
+    assert guess_category("New US sanctions against Russia announced by White House") == THEME_POLITICS
 
 
 def test_normalize_general():
-    assert normalize_category("General") == THEME_TECHNOLOGY
-    assert normalize_category("Politics") == THEME_BUSINESS
+    assert normalize_category("General") == THEME_OTHER
+    assert normalize_category("Politics") == THEME_POLITICS
+    assert normalize_category("Other") == THEME_OTHER
     assert normalize_category("ИИ") == THEME_AI_SOFTWARE
     assert normalize_category("ai_software") == THEME_AI_SOFTWARE
     assert normalize_category("Technology") == THEME_TECHNOLOGY
@@ -55,8 +58,18 @@ def test_channel_footer_does_not_force_software():
     )
     cat = classify_event_text(title, summary)
     assert cat not in (THEME_AI_SOFTWARE, THEME_MOBILE)
-    assert cat == THEME_TECHNOLOGY
+    assert cat == THEME_POLITICS
 
 
-def test_sanctions_are_business():
-    assert guess_category("Евросоюз ввел санкции против VK и Max") == THEME_BUSINESS
+def test_sanctions_are_politics():
+    assert guess_category("Евросоюз ввел санкции против VK и Max") == THEME_POLITICS
+
+
+def test_unknown_is_other():
+    assert guess_category("Сегодня хорошая погода в городе") == THEME_OTHER
+    assert normalize_category("") == THEME_OTHER
+    assert normalize_category("TotallyUnknownLabel") == THEME_OTHER
+
+
+def test_business_without_politics():
+    assert guess_category("Стартап привлек $50M funding на IPO") == THEME_BUSINESS

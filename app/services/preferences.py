@@ -13,7 +13,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.models import Channel, Event, EventSource, Message, User, UserChannel, UserEventState, UserSettings
 from app.services.categories import (
     DEFAULT_CATEGORIES,
-    THEME_TECHNOLOGY,
+    THEME_OTHER,
     default_theme_weights,
     migrate_enabled_list,
     normalize_category,
@@ -56,18 +56,7 @@ class PreferencesService:
         if not current:
             settings.enabled_categories = DEFAULT_CATEGORIES.copy()
             return
-        migrated = migrate_enabled_list(current)
-        # Only replace if keys changed (legacy rename) — if user had subset, keep subset
-        # migrate_enabled_list maps each item; length may shrink for dupes
-        mapped: list[str] = []
-        seen: set[str] = set()
-        for item in current:
-            key = normalize_category(str(item))
-            if key in DEFAULT_CATEGORIES and key not in seen:
-                seen.add(key)
-                mapped.append(key)
-        if not mapped:
-            mapped = list(DEFAULT_CATEGORIES)
+        mapped = migrate_enabled_list(current)
         if mapped != current:
             settings.enabled_categories = mapped
             try:
@@ -412,7 +401,7 @@ class FeedService:
         if not cats:
             return [], 0
         stmt = stmt.where(
-            func.coalesce(Event.category, THEME_TECHNOLOGY).in_(cats)
+            func.coalesce(Event.category, THEME_OTHER).in_(cats)
         )
         for topic in ignored:
             pat = f"%{topic}%"
@@ -477,7 +466,7 @@ class FeedService:
             .where(Event.status == "active")
             .where(Event.id.in_(list(allowed)))
             .where(Event.importance_score >= settings.min_importance)
-            .where(func.coalesce(Event.category, THEME_TECHNOLOGY).in_(cats))
+            .where(func.coalesce(Event.category, THEME_OTHER).in_(cats))
             .order_by(Event.importance_score.asc(), Event.updated_at.asc())
             .limit(max_n + 80)
         )

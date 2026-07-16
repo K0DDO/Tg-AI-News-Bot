@@ -19,6 +19,8 @@ def test_ensure_categories_empty_gets_defaults():
 
 
 def test_ensure_categories_migrates_legacy_and_dedupes():
+    from app.services.categories import THEME_OTHER
+
     settings = SimpleNamespace(enabled_categories=["AI", "Software", "General", "Technology"])
     PreferencesService._ensure_categories(settings)
-    assert settings.enabled_categories == [THEME_AI_SOFTWARE, THEME_TECHNOLOGY]
+    assert settings.enabled_categories == [THEME_AI_SOFTWARE, THEME_OTHER, THEME_TECHNOLOGY]
