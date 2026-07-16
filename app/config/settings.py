@@ -1,4 +1,4 @@
-"""Central application settings — local (.env.local) and production (.env.production)."""
+"""Central application settings — production `.env.production` on the VPS."""
 
 from __future__ import annotations
 
@@ -14,12 +14,11 @@ _ROOT = Path(__file__).resolve().parents[2]
 
 def resolve_env_files() -> tuple[str, ...]:
     """
-    Env file precedence:
+    Env file precedence (server-first):
       1. BRIEFLY_ENV_FILE / ENV_FILE (explicit path)
-      2. .env.production when APP_ENV=production
-      3. .env.local (local Windows/dev)
-      4. .env (legacy fallback)
-    OS environment variables always win over file values.
+      2. .env.production
+      3. .env (optional fallback)
+    OS / Compose environment variables always win over file values.
     """
     explicit = (os.getenv("BRIEFLY_ENV_FILE") or os.getenv("ENV_FILE") or "").strip()
     if explicit:
@@ -28,29 +27,13 @@ def resolve_env_files() -> tuple[str, ...]:
             path = _ROOT / path
         return (str(path),) if path.exists() else (explicit,)
 
-    app_env = (os.getenv("APP_ENV") or "").strip().lower()
     files: list[str] = []
     prod = _ROOT / ".env.production"
-    local = _ROOT / ".env.local"
     legacy = _ROOT / ".env"
-
-    # Later files override earlier ones (pydantic-settings).
-    if app_env == "production":
-        if prod.exists():
-            files.append(str(prod))
-        elif legacy.exists():
-            files.append(str(legacy))
-    elif local.exists():
-        if legacy.exists():
-            files.append(str(legacy))
-        files.append(str(local))
+    if prod.exists():
+        files.append(str(prod))
     elif legacy.exists():
         files.append(str(legacy))
-    elif prod.exists():
-        # Rare: only production file present while developing
-        files.append(str(prod))
-
-    # Empty → Docker Compose / OS env only (no secrets baked into the image)
     return tuple(files)
 
 
@@ -62,7 +45,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_env: str = "development"
+    app_env: str = "production"
     app_debug: bool = False
     log_level: str = "INFO"
 
@@ -71,8 +54,7 @@ class Settings(BaseSettings):
     postgres_db: str = "briefly"
     postgres_host: str = "localhost"
     postgres_port: int = 5432
-    # If set, used as-is. Prefer leaving empty and using POSTGRES_* parts
-    # so local (localhost) vs Docker (postgres) both work from the same pattern.
+    # If set, used as-is. Prefer leaving empty — Compose sets DATABASE_URL for briefly-app.
     database_url: str | None = None
 
     bot_token: str = Field(default="", description="Telegram Bot API token")
@@ -108,11 +90,18 @@ class Settings(BaseSettings):
     embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2"
 
     ai_provider: str = "heuristic"
-    groq_api_key: str = ""
+    groq_api_key: str = ""  # legacy single key
+    groq_api_keys: str = ""  # comma-separated key pool
     groq_model: str = "llama-3.1-8b-instant"
     groq_base_url: str = "https://api.groq.com/openai/v1"
     groq_timeout_seconds: float = 45.0
+    kimi_api_keys: str = ""  # comma-separated Moonshot/Kimi keys
+    kimi_model: str = "moonshot-v1-8k"
+    kimi_base_url: str = "https://api.moonshot.ai/v1"
+    kimi_timeout_seconds: float = 60.0
     ai_search_synthesis: bool = True
+    ai_batch_size: int = 30  # messages per AI processing batch
+    ai_cache_ttl_days: int = 30
 
     logs_dir: str = "./data/logs"
 

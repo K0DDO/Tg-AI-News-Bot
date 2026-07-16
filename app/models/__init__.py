@@ -6,6 +6,7 @@ from app.models.enums import MessageStatus, ReactionType
 from app.models.event import Event, EventSource, News, NewsSource
 from app.models.knowledge import EDGE_TYPES, NODE_TYPES, Edge, EventNode, Node
 from app.models.message import Message, TelegramPost
+from app.models.processing_job import ProcessingJob
 from app.models.reaction import Reaction
 from app.models.user import User
 from app.models.user_action import UserActionLog
@@ -33,6 +34,7 @@ __all__ = [
     "ReactionType",
     "AiUsageLog",
     "BackfillJob",
+    "ProcessingJob",
     "Node",
     "Edge",
     "EventNode",

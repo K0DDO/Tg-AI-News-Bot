@@ -78,6 +78,26 @@ async def _start_scheduler(settings) -> AsyncIOScheduler:
         max_instances=1,
         coalesce=True,
     )
+    from app.services.queue import run_queue_cycle
+    from app.tasks.pipeline import run_nightly_maintenance
+
+    scheduler.add_job(
+        _wrap_job("ai_queue", run_queue_cycle),
+        "interval",
+        seconds=20,
+        id="ai_queue",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _wrap_job("nightly", run_nightly_maintenance),
+        "cron",
+        hour=3,
+        minute=0,
+        id="nightly",
+        max_instances=1,
+        coalesce=True,
+    )
     scheduler.start()
     logger.info("Scheduler started (poll every %ss)", settings.parser_poll_interval_seconds)
     return scheduler

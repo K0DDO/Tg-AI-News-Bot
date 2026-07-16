@@ -21,9 +21,9 @@ if ($PSScriptRoot) {
 }
 Set-Location -LiteralPath $Root
 
-# Prefer .env.local for Windows development
-if (Test-Path -LiteralPath (Join-Path $Root ".env.local")) {
-    $env:BRIEFLY_ENV_FILE = (Join-Path $Root ".env.local")
+# Prefer .env.production (server config); optional explicit override via BRIEFLY_ENV_FILE
+if (-not $env:BRIEFLY_ENV_FILE -and (Test-Path -LiteralPath (Join-Path $Root ".env.production"))) {
+    $env:BRIEFLY_ENV_FILE = (Join-Path $Root ".env.production")
 }
 
 $Python = Join-Path $Root ".venv\Scripts\python.exe"

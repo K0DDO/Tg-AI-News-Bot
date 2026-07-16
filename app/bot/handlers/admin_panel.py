@@ -36,21 +36,25 @@ except ImportError:  # pragma: no cover
 router = Router(name="admin_panel")
 
 BTN_STATS = "📊 Статистика"
-BTN_LOGS = "📜 Логи"
-BTN_DIAG = "🧪 Диагностика"
+BTN_LOGS = "📝 Логи"
+BTN_GRAPH = "🕸 Граф"
+BTN_AI = "🤖 AI"
 BTN_USERS = "👥 Пользователи"
+BTN_SYSTEM = "⚙️ Система"
 BTN_WHITELIST = "🔐 Вайтлист"
 BTN_PASSWORD = "🔑 Сменить пароль"
 BTN_EXIT = "🚪 Выйти"
 BTN_CANCEL = "❌ Отмена"
+# legacy aliases (handlers may still match)
+BTN_DIAG = "🧪 Диагностика"
 
 
 def admin_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=BTN_STATS), KeyboardButton(text=BTN_USERS)],
-            [KeyboardButton(text=BTN_WHITELIST), KeyboardButton(text=BTN_LOGS)],
-            [KeyboardButton(text=BTN_DIAG), KeyboardButton(text=BTN_PASSWORD)],
+            [KeyboardButton(text=BTN_STATS), KeyboardButton(text=BTN_LOGS)],
+            [KeyboardButton(text=BTN_GRAPH), KeyboardButton(text=BTN_AI)],
+            [KeyboardButton(text=BTN_USERS), KeyboardButton(text=BTN_SYSTEM)],
             [KeyboardButton(text=BTN_EXIT)],
         ],
         resize_keyboard=True,
@@ -467,7 +471,8 @@ async def admin_stats(
         [
             "",
             "📰 Постов: <b>{posts}</b> · 🔥 Events: <b>{events}</b>".format(**stats),
-            "🤖 AI запросов: <b>{ai_requests}</b>".format(**stats),
+            "🤖 AI запросов: <b>{ai_requests}</b> · токены in/out: "
+            "<b>{tokens_in}</b>/<b>{tokens_out}</b>".format(**stats),
             "",
             "🔐 Вайтлист: <b>{status}</b> ({n} id)".format(
                 status="ВКЛ" if stats.get("whitelist_enabled") else "выкл",
@@ -576,7 +581,8 @@ async def admin_users_start(
     lines.append("")
     lines.append(
         "Пришлите Telegram ID / @username / внутренний id.\n\n"
-        f"Или «{BTN_CANCEL}»."
+        f"Или «{BTN_CANCEL}».\n"
+        f"Вайтлист: кнопка «{BTN_WHITELIST}» в меню Система."
     )
     await state.set_state(AdminAuthStates.find_user)
     await state.update_data(admin_ok=True)
@@ -585,7 +591,10 @@ async def admin_users_start(
         state,
         "\n".join(lines),
         reply_markup=ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text=BTN_CANCEL)]],
+            keyboard=[
+                [KeyboardButton(text=BTN_WHITELIST)],
+                [KeyboardButton(text=BTN_CANCEL)],
+            ],
             resize_keyboard=True,
         ),
     )
@@ -1045,6 +1054,240 @@ async def admin_demote(
     await _refresh_user_card(callback, session, state, target, db_user)
 
 
+@router.message(AdminAuthStates.menu, F.text == BTN_GRAPH)
+async def admin_graph_menu(
+    message: Message,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        raise SkipHandler()
+    from sqlalchemy import func, select
+
+    from app.models import Edge, Node
+
+    nodes = await session.scalar(select(func.count()).select_from(Node)) or 0
+    edges = await session.scalar(select(func.count()).select_from(Edge)) or 0
+    text = (
+        "<b>🕸 Knowledge Graph</b>\n\n"
+        f"Узлов: <b>{nodes}</b>\n"
+        f"Связей: <b>{edges}</b>\n\n"
+        "Пересборка: decay, удаление битых/orphan Topic, merge дублей, backfill связей."
+    )
+    await _admin_answer(
+        message,
+        state,
+        text,
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🕸 Обновить граф",
+                        callback_data="adm:kg:rebuild",
+                    )
+                ]
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data == "adm:kg:rebuild")
+async def admin_kg_rebuild(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await callback.answer("Запущено…")
+    from app.services.knowledge import KnowledgeGraphService
+
+    stats = await KnowledgeGraphService(session).rebuild_maintenance()
+    record_admin_log("INFO", f"KG rebuild by={db_user.id} stats={stats}")
+    text = (
+        "<b>🕸 Граф обновлён</b>\n\n"
+        f"Старых узлов: <b>{stats.get('old_nodes', 0)}</b>\n"
+        f"Новых: <b>{stats.get('new_nodes', 0)}</b>\n"
+        f"Удалено: <b>{stats.get('deleted', 0)}</b>\n"
+        f"Исправлено: <b>{stats.get('fixed', 0)}</b>\n"
+        f"Merge дублей: <b>{stats.get('merged_duplicates', 0)}</b>\n"
+        f"Backfill events: <b>{stats.get('backfilled_events', 0)}</b>\n"
+        f"Decay edges: <b>{stats.get('decayed', 0)}</b>"
+    )
+    if callback.message:
+        await callback.message.edit_text(text)
+
+
+@router.message(AdminAuthStates.menu, F.text == BTN_AI)
+async def admin_ai_menu(
+    message: Message,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        raise SkipHandler()
+    from sqlalchemy import func, select
+
+    from app.models import AiUsageLog
+    from app.services.ai import get_ai_manager, reset_ai_service_cache
+    from app.services.queue import queue_depth
+
+    reset_ai_service_cache()
+    mgr = get_ai_manager()
+    snap = mgr.status_snapshot() if mgr else {"groq_keys": 0, "kimi_keys": 0, "groq_available": 0, "kimi_available": 0}
+    depth = await queue_depth(session)
+    ai_n = await session.scalar(select(func.count()).select_from(AiUsageLog)) or 0
+    tok_in = await session.scalar(
+        select(func.coalesce(func.sum(AiUsageLog.tokens_in), 0))
+    ) or 0
+    tok_out = await session.scalar(
+        select(func.coalesce(func.sum(AiUsageLog.tokens_out), 0))
+    ) or 0
+    settings = get_settings()
+    text = (
+        "<b>🤖 AI настройки</b>\n\n"
+        f"Режим: <code>{settings.ai_provider}</code>\n"
+        f"Groq ключей: <b>{snap.get('groq_keys', 0)}</b> "
+        f"(доступно {snap.get('groq_available', 0)})\n"
+        f"Kimi ключей: <b>{snap.get('kimi_keys', 0)}</b> "
+        f"(доступно {snap.get('kimi_available', 0)})\n"
+        f"Очередь AI: queued <b>{depth['queued']}</b> · running <b>{depth['running']}</b>\n\n"
+        f"Запросов в логе: <b>{ai_n}</b>\n"
+        f"Токены: in <b>{tok_in}</b> / out <b>{tok_out}</b>\n\n"
+        "Ключи задаются в ENV: <code>GROQ_API_KEYS</code>, <code>KIMI_API_KEYS</code>."
+    )
+    await _admin_answer(message, state, text)
+
+
+@router.message(AdminAuthStates.menu, F.text == BTN_SYSTEM)
+async def admin_system_menu(
+    message: Message,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        raise SkipHandler()
+    snap = diagnostics_snapshot()
+    ingest = snap.get("last_ingest") or last_ingest() or {}
+    redis_ok = await ping_redis()
+    settings = get_settings()
+    text = (
+        "<b>⚙️ Система</b>\n\n"
+        f"Uptime: {snap.get('uptime')}\n"
+        f"Redis: {'✅' if redis_ok else '❌'}\n"
+        f"AI provider: {settings.ai_provider or '—'}\n"
+        f"Ingest: +{ingest.get('created_messages', '—')} msgs / "
+        f"{ingest.get('processed', '—')} processed\n"
+    )
+    await _admin_answer(
+        message,
+        state,
+        text,
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🌙 Запустить nightly",
+                        callback_data="adm:sys:nightly",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🧹 Orphan-каналы",
+                        callback_data="adm:purge_orphans",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🔐 Вайтлист",
+                        callback_data="adm:sys:wl",
+                    )
+                ],
+            ]
+        ),
+    )
+    # Also offer reply shortcuts
+    await message.answer(
+        "Дополнительно:",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text=BTN_WHITELIST), KeyboardButton(text=BTN_PASSWORD)],
+                [KeyboardButton(text=BTN_DIAG), KeyboardButton(text="🔙 Админ-меню")],
+            ],
+            resize_keyboard=True,
+        ),
+    )
+
+
+@router.message(AdminAuthStates.menu, F.text == "🔙 Админ-меню")
+async def admin_back_main(
+    message: Message,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        raise SkipHandler()
+    await _admin_answer(message, state, "🛠 Админ-меню:", reply_markup=admin_menu_keyboard())
+
+
+@router.callback_query(F.data == "adm:sys:nightly")
+async def admin_sys_nightly(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await callback.answer("Nightly…")
+    from app.tasks.pipeline import run_nightly_maintenance
+
+    stats = await run_nightly_maintenance()
+    record_admin_log("INFO", f"Manual nightly by={db_user.id} {stats}")
+    if callback.message:
+        lines = ["<b>🌙 Nightly выполнен</b>", ""]
+        for k, v in stats.items():
+            lines.append(f"{k}: <b>{v}</b>")
+        await callback.message.edit_text("\n".join(lines))
+
+
+@router.callback_query(F.data == "adm:sys:wl")
+async def admin_sys_wl(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await callback.answer()
+    # Reuse whitelist menu text via fake message path
+    if callback.message:
+        from app.services.whitelist import WhitelistService
+
+        wl = WhitelistService(session)
+        enabled = await wl.is_whitelist_enabled()
+        entries = await wl.list_entries(limit=20)
+        lines = [
+            f"<b>🔐 Вайтлист</b> — {'ВКЛ' if enabled else 'выкл'}",
+            f"Записей: {len(entries)}",
+        ]
+        for e in entries[:15]:
+            lines.append(f"· <code>{e.telegram_id}</code>")
+        await callback.message.answer(
+            "\n".join(lines) + f"\n\nОткройте «{BTN_WHITELIST}» в reply-меню для управления."
+        )
+
+
+@router.message(AdminAuthStates.find_user, F.text == BTN_WHITELIST)
 @router.message(AdminAuthStates.menu, F.text == BTN_WHITELIST)
 async def admin_whitelist_menu(
     message: Message,

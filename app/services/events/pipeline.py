@@ -128,11 +128,20 @@ class EventPipeline:
             source_count=1,
             channel_title=channel_title,
         )
-        await log_ai_usage(
+        from app.services.ai.usage import log_call_meta
+
+        meta = getattr(self._ai, "last_meta", None)
+        await log_call_meta(
             self._session,
-            provider=getattr(self._ai, "provider_name", "unknown"),
+            meta,
             operation="analyze_post",
         )
+        if meta is None:
+            await log_ai_usage(
+                self._session,
+                provider=getattr(self._ai, "provider_name", "unknown"),
+                operation="analyze_post",
+            )
 
         message.raw_entities = list(analysis.entities)
         if analysis.language:

@@ -418,10 +418,10 @@ class KnowledgeGraphService:
         await self._session.flush()
         return n
 
-    async def resolve_query_nodes(self, query: str) -> list[Node]:
+    async def resolve_query_nodes(self, query: str, *, read_only: bool = False) -> list[Node]:
+        """Map query tokens to KG nodes. read_only=True never creates new nodes."""
         await self.ensure_seed()
         names = self._scan_known_aliases(query)
-        # tokens
         for tok in _TOKEN.findall(query or ""):
             if len(tok) >= 3:
                 names.append(tok)
@@ -429,12 +429,26 @@ class KnowledgeGraphService:
         nodes: list[Node] = []
         seen: set[int] = set()
         for ent in resolved:
-            node = await self.upsert_node(
-                ent.name,
-                ent.node_type,
-                aliases=[ent.raw],
-                categories=list(ent.categories),
-            )
+            if read_only:
+                # Only attach to existing nodes (alias / slug lookup)
+                found = await self.find_node_by_alias(ent.name)
+                if found is None:
+                    found = await self.find_node_by_alias(ent.raw)
+                if found is None:
+                    slug = slugify(ent.name)
+                    found = (
+                        await self._session.execute(select(Node).where(Node.slug == slug))
+                    ).scalar_one_or_none()
+                if found is None:
+                    continue
+                node = found
+            else:
+                node = await self.upsert_node(
+                    ent.name,
+                    ent.node_type,
+                    aliases=[ent.raw],
+                    categories=list(ent.categories),
+                )
             if node.id not in seen:
                 seen.add(node.id)
                 nodes.append(node)
@@ -459,3 +473,104 @@ class KnowledgeGraphService:
             n += 1
         await self._session.flush()
         return n
+
+    async def rebuild_maintenance(self) -> dict[str, int]:
+        """Repair KG: decay, drop self-edges, prune orphans, merge dupes, backfill."""
+        from sqlalchemy import delete, func
+
+        old_nodes = int(await self._session.scalar(select(func.count()).select_from(Node)) or 0)
+        old_edges = int(await self._session.scalar(select(func.count()).select_from(Edge)) or 0)
+        decayed = await self.decay_stale_edges()
+
+        self_edges = list(
+            (
+                await self._session.execute(
+                    select(Edge).where(Edge.from_node_id == Edge.to_node_id)
+                )
+            ).scalars().all()
+        )
+        fixed = 0
+        for edge in self_edges:
+            await self._session.delete(edge)
+            fixed += 1
+
+        dup_slugs = list(
+            (
+                await self._session.execute(
+                    select(Node.slug, func.count()).group_by(Node.slug).having(func.count() > 1)
+                )
+            ).all()
+        )
+        merged = 0
+        for slug, _cnt in dup_slugs:
+            rows = list(
+                (
+                    await self._session.execute(
+                        select(Node).where(Node.slug == slug).order_by(Node.id.asc())
+                    )
+                ).scalars().all()
+            )
+            if len(rows) < 2:
+                continue
+            keep = rows[0]
+            for dup in rows[1:]:
+                for edge in (
+                    await self._session.execute(
+                        select(Edge).where(
+                            (Edge.from_node_id == dup.id) | (Edge.to_node_id == dup.id)
+                        )
+                    )
+                ).scalars().all():
+                    if edge.from_node_id == dup.id:
+                        edge.from_node_id = keep.id
+                    if edge.to_node_id == dup.id:
+                        edge.to_node_id = keep.id
+                    if edge.from_node_id == edge.to_node_id:
+                        await self._session.delete(edge)
+                for link in (
+                    await self._session.execute(
+                        select(EventNode).where(EventNode.node_id == dup.id)
+                    )
+                ).scalars().all():
+                    link.node_id = keep.id
+                keep.mention_count = int(keep.mention_count or 0) + int(dup.mention_count or 0)
+                await self._session.delete(dup)
+                merged += 1
+                fixed += 1
+
+        orphans = list(
+            (
+                await self._session.execute(
+                    select(Node)
+                    .where(
+                        Node.node_type == "Topic",
+                        Node.mention_count <= 1,
+                        ~select(EventNode.id).where(EventNode.node_id == Node.id).exists(),
+                    )
+                    .limit(500)
+                )
+            ).scalars().all()
+        )
+        deleted = 0
+        for node in orphans:
+            await self._session.execute(
+                delete(Edge).where(
+                    (Edge.from_node_id == node.id) | (Edge.to_node_id == node.id)
+                )
+            )
+            await self._session.delete(node)
+            deleted += 1
+
+        backfilled = await self.backfill_events(limit=400)
+        await self._session.commit()
+        new_nodes = int(await self._session.scalar(select(func.count()).select_from(Node)) or 0)
+        return {
+            "old_nodes": old_nodes,
+            "new_nodes": new_nodes,
+            "old_edges": old_edges,
+            "decayed": decayed,
+            "fixed": fixed,
+            "merged_duplicates": merged,
+            "deleted": deleted,
+            "backfilled_events": backfilled,
+        }

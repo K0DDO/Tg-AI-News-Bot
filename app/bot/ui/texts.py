@@ -349,46 +349,52 @@ def format_backfill_progress(lang: str, job) -> str:
     pct = int(getattr(job, "percent", 0) or 0)
     done = int(getattr(job, "done", 0) or 0)
     total = int(getattr(job, "total", 0) or 0)
-    days = int(getattr(job, "days", 0) or 0)
-    msgs = int(getattr(job, "messages_fetched", 0) or 0)
+    msgs = int(getattr(job, "messages_fetched", 0) or getattr(job, "messages_total", 0) or 0)
     events_n = int(getattr(job, "events_processed", 0) or 0)
+    created_n = int(getattr(job, "events_created", 0) or 0)
+    merged_n = int(getattr(job, "events_merged", 0) or 0)
     status = str(getattr(job, "status", "") or "")
-    status_key = {
-        "queued": "bf_status_queued",
-        "running": "bf_status_running",
-        "analyzing": "bf_status_analyzing",
-        "done": "bf_status_done",
-        "failed": "bf_status_failed",
-    }.get(status, "bf_status_queued")
+    stage_key = getattr(job, "stage_label_key", None) or "bf_stage_queued"
+    try:
+        stage_label = t(lang, stage_key)
+    except Exception:
+        stage_label = stage_key
+
+    total_t = int(getattr(job, "total_tasks", 0) or 0)
+    done_t = int(getattr(job, "completed_tasks", 0) or 0)
 
     if status == "done":
-        created = getattr(job, "created_at", None)
-        updated = getattr(job, "updated_at", None)
+        started = getattr(job, "started_at", None) or getattr(job, "created_at", None)
+        finished = getattr(job, "finished_at", None) or getattr(job, "updated_at", None)
         elapsed = ""
-        if created and updated:
+        if started and finished:
             try:
-                secs = int((updated - created).total_seconds())
+                secs = int((finished - started).total_seconds())
                 m, s = divmod(max(0, secs), 60)
                 elapsed = f"\n⏱ {t(lang, 'bf_time')}: <b>{m}:{s:02d}</b>"
             except Exception:
                 elapsed = ""
         return (
             f"<b>✅ {t(lang, 'bf_done_title')}</b>\n\n"
-            f"{t(lang, 'bf_added')}:\n"
-            f"📰 {t(lang, 'bf_news_label')}: <b>{msgs}</b>\n"
-            f"🔥 Events: <b>{events_n}</b>"
+            f"{t(lang, 'bf_stats_title')}:\n"
+            f"📄 {t(lang, 'bf_posts_label')}: <b>{msgs}</b>\n"
+            f"📰 {t(lang, 'bf_news_label')}: <b>{created_n or events_n}</b>\n"
+            f"🔗 {t(lang, 'bf_merged_label')}: <b>{merged_n}</b>"
             f"{elapsed}"
         )
 
-    waiting = t(lang, "bf_waiting") if status in {"queued", "running", "analyzing"} else ""
+    ai_line = ""
+    if total_t > 0 and (status == "analyzing" or getattr(job, "current_stage", "") == "ai"):
+        ai_line = f"\n🤖 {t(lang, 'bf_ai_progress')}: <b>{done_t}/{total_t}</b>"
+
     return (
-        f"<b>📰 {t(lang, 'bf_loading_title')}</b>\n\n"
+        f"<b>🍓 {t(lang, 'bf_loading_title')}</b>\n\n"
         f"<code>{_progress_bar(pct)}</code> <b>{pct}%</b>\n\n"
+        f"📍 {stage_label}\n"
         f"📡 {t(lang, 'bf_channels', done=done, total=total)}\n"
-        f"📝 {t(lang, 'bf_posts_label')}: <b>{msgs}</b>\n"
-        f"🧠 {t(lang, 'bf_analysis_label')}: <b>{events_n}</b>\n"
-        f"{t(lang, 'bf_status')}: <b>{t(lang, status_key)}</b>\n"
-        f"{waiting}"
+        f"📝 {t(lang, 'bf_posts_label')}: <b>{msgs}</b>"
+        f"{ai_line}\n"
+        f"🧠 {t(lang, 'bf_analysis_label')}: <b>{events_n}</b>"
     )
 
 

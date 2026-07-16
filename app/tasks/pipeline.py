@@ -94,9 +94,30 @@ async def run_ingest_cycle() -> dict[str, int]:
             active_jobs = await channels_svc.list_active_backfill_jobs()
             had_jobs = bool(active_jobs)
 
-            # 1) Job-driven history backfill (progress tracked)
+            # 1) Job-driven history backfill (progress tracked by stages)
+            from datetime import datetime, timezone
+
+            from app.services.queue import (
+                STAGE_AI,
+                STAGE_CONNECT,
+                STAGE_DONE,
+                STAGE_FETCH,
+                STAGE_RELATIONS,
+                STAGE_SAVE,
+                enqueue_ai_batches_for_raw,
+            )
+
             for job in active_jobs:
+                now = datetime.now(timezone.utc)
+                if not job.started_at:
+                    job.started_at = now
                 job.status = "running"
+                job.current_stage = STAGE_CONNECT
+                job.total_tasks = max(1, len(job.channel_ids or []))
+                job.completed_tasks = len(job.done_channel_ids or [])
+                await session.commit()
+
+                job.current_stage = STAGE_FETCH
                 await session.commit()
                 done = list(job.done_channel_ids or [])
                 for channel_id in list(job.channel_ids or []):
@@ -106,6 +127,7 @@ async def run_ingest_cycle() -> dict[str, int]:
                     if channel is None:
                         done.append(channel_id)
                         job.done_channel_ids = list(done)
+                        job.completed_tasks = len(done)
                         await session.commit()
                         continue
                     try:
@@ -113,6 +135,7 @@ async def run_ingest_cycle() -> dict[str, int]:
                         created_messages += n
                         backfilled += n
                         job.messages_fetched = int(job.messages_fetched or 0) + n
+                        job.messages_total = int(job.messages_total or 0) + n
                         logger.info(
                             "Backfill job=%s %sd channel %s: +%s",
                             job.id,
@@ -126,14 +149,26 @@ async def run_ingest_cycle() -> dict[str, int]:
                             job.id,
                             channel_id,
                         )
+                        job.failed_tasks = int(job.failed_tasks or 0) + 1
                     done.append(channel_id)
                     job.done_channel_ids = list(done)
+                    job.completed_tasks = len(done)
                     pending = channel.pending_backfill_days or 0
                     if pending and pending <= job.days:
                         channel.pending_backfill_days = None
                     await session.commit()
+
+                # Enqueue AI batches instead of blocking forever inline
+                job.current_stage = STAGE_AI
                 job.status = "analyzing"
+                job.total_tasks = max(1, int(job.messages_total or job.messages_fetched or 1))
+                job.completed_tasks = 0
                 await session.commit()
+                n_batches = await enqueue_ai_batches_for_raw(
+                    session, backfill_job_id=job.id, limit=3000
+                )
+                await session.commit()
+                logger.info("Backfill job=%s enqueued %s AI batches", job.id, n_batches)
 
             # Leftover channel flags without a job (e.g. race / legacy)
             pending = await channels_svc.list_pending_backfill()
@@ -167,9 +202,12 @@ async def run_ingest_cycle() -> dict[str, int]:
                     logger.exception("Ingest failed for channel %s", channel.id)
             await session.commit()
 
-            # 3) Analyze raw posts
+            # 3) Enqueue new RAW + process a limited inline batch for freshness
+            await enqueue_ai_batches_for_raw(session, limit=500)
+            await session.commit()
+
             pipeline = EventPipeline(session, embedding=embedding, ai=ai)
-            raw_limit = 500 if backfilled or had_jobs else 200
+            raw_limit = 80  # keep ingest snappy; heavy work goes to queue
             stats = await _process_raw(
                 session,
                 messages_repo=messages_repo,
@@ -183,30 +221,45 @@ async def run_ingest_cycle() -> dict[str, int]:
             ads += stats["ads"]
             await session.commit()
 
-            if backfilled or had_jobs:
-                for _ in range(5):
-                    more = await _process_raw(
-                        session,
-                        messages_repo=messages_repo,
-                        pipeline=pipeline,
-                        limit=500,
-                    )
-                    batch = more["processed"] + more["filtered"]
-                    if batch == 0:
-                        break
-                    processed += more["processed"]
-                    filtered += more["filtered"]
-                    merged += more["merged"]
-                    ai_created += more["ai_created"]
-                    ads += more["ads"]
-                    for job in active_jobs:
-                        if job.status == "analyzing":
-                            job.events_processed = int(job.events_processed or 0) + more["processed"]
-                    await session.commit()
+            # Update backfill AI progress from messages still raw vs processed
+            from app.models import Message
+            from app.models.enums import MessageStatus
+            from sqlalchemy import func, select
 
             for job in active_jobs:
-                if job.status in {"analyzing", "running", "queued"}:
+                if job.status not in {"analyzing", "running"}:
+                    continue
+                ch_ids = list(job.channel_ids or [])
+                if not ch_ids:
                     job.status = "done"
+                    job.current_stage = STAGE_DONE
+                    job.finished_at = datetime.now(timezone.utc)
+                    continue
+                raw_left = await session.scalar(
+                    select(func.count())
+                    .select_from(Message)
+                    .where(
+                        Message.channel_id.in_(ch_ids),
+                        Message.status == MessageStatus.RAW.value,
+                    )
+                )
+                total_m = max(1, int(job.messages_total or job.messages_fetched or 1))
+                left = int(raw_left or 0)
+                done_m = max(0, total_m - left)
+                job.completed_tasks = done_m
+                job.total_tasks = total_m
+                job.events_processed = int(job.events_processed or 0) + stats["processed"]
+                job.events_created = int(job.events_created or 0) + stats["ai_created"]
+                job.events_merged = int(job.events_merged or 0) + stats["merged"]
+                if left == 0:
+                    job.current_stage = STAGE_RELATIONS
+                    job.current_stage = STAGE_SAVE
+                    job.status = "done"
+                    job.current_stage = STAGE_DONE
+                    job.finished_at = datetime.now(timezone.utc)
+                    job.completed_tasks = total_m
+                else:
+                    job.current_stage = STAGE_AI
             await session.commit()
     finally:
         await client.disconnect()
@@ -246,4 +299,23 @@ async def run_kg_maintenance() -> dict[str, int]:
         backfilled = await kg.backfill_events(limit=200)
         decayed = await kg.decay_stale_edges()
         await session.commit()
-    return {"backfilled": backfilled, "decayed": decayed}
+        return {"backfilled": backfilled, "decayed": decayed}
+
+
+async def run_nightly_maintenance() -> dict[str, int]:
+    """03:00 maintenance: KG repair, orphan channels, message cleanup."""
+    from app.services.knowledge import KnowledgeGraphService
+    from app.services.preferences import PreferencesService
+
+    session_factory = get_session_factory()
+    out: dict[str, int] = {}
+    async with session_factory() as session:
+        kg_stats = await KnowledgeGraphService(session).rebuild_maintenance()
+        out.update({f"kg_{k}": int(v) for k, v in kg_stats.items()})
+        purged = await PreferencesService(session).purge_all_orphan_channels()
+        await session.commit()
+        out["orphan_channels_purged"] = purged
+    cleaned = await run_cleanup()
+    out["messages_cleaned"] = int(cleaned or 0)
+    logger.info("Nightly maintenance %s", out)
+    return out

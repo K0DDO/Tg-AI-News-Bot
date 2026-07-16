@@ -12,7 +12,8 @@ from app.config import get_settings
 from app.health import record_error, record_ingest
 from app.logging_setup import setup_logging
 from app.services.digest_dispatch import run_digest_cycle
-from app.tasks.pipeline import run_cleanup, run_ingest_cycle, run_kg_maintenance
+from app.tasks.pipeline import run_cleanup, run_ingest_cycle, run_kg_maintenance, run_nightly_maintenance
+from app.services.queue import run_queue_cycle
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,23 @@ async def run_worker() -> None:
         "interval",
         minutes=15,
         id="digest",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _wrap_job("ai_queue", run_queue_cycle),
+        "interval",
+        seconds=20,
+        id="ai_queue",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _wrap_job("nightly", run_nightly_maintenance),
+        "cron",
+        hour=3,
+        minute=0,
+        id="nightly",
         max_instances=1,
         coalesce=True,
     )

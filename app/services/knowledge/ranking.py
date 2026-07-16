@@ -115,5 +115,5 @@ def rank_event(
 
 
 # Secondary relevance: drop weak matches
-SECONDARY_THRESHOLD = 0.28
-DEEP_SECONDARY_THRESHOLD = 0.22
+SECONDARY_THRESHOLD = 0.38
+DEEP_SECONDARY_THRESHOLD = 0.34

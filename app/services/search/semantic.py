@@ -276,12 +276,15 @@ class SearchService:
             if seed_nodes and not any(n.name in r.matched_nodes for n in seed_nodes) and not any(
                 n.name in (r.matched_nodes or []) for n, d in expanded if d <= 1
             ):
+                # Always require decent semantic match when seed nodes miss
+                if r.semantic < (0.40 if deep else 0.45):
+                    continue
                 if intent.intent not in (
                     SearchIntent.QA,
                     SearchIntent.RECOMMENDATION,
                     SearchIntent.DEEP,
                 ) and not deep:
-                    if r.semantic < 0.42:
+                    if r.semantic < 0.48:
                         continue
             blob = f"{r.event.title} {r.event.summary}"
             if any(is_near_duplicate(blob, f"{x.event.title} {x.event.summary}") for x in filtered):
@@ -378,7 +381,7 @@ class SearchService:
             )
             external_count = sum(1 for r in global_ranked if r.event.id not in user_ids)
 
-        seed_nodes = await self._kg.resolve_query_nodes(query)
+        seed_nodes = await self._kg.resolve_query_nodes(query, read_only=True)
         node_names = [n.name for n in seed_nodes]
         expanded = await self._kg.expand_nodes([n.id for n in seed_nodes], max_extra=8)
         for n, _d in expanded:
@@ -400,37 +403,91 @@ class SearchService:
         explanations = {r.event.id: r.explanation for r in ranked}
         event_map = {r.event.id: r.event for r in ranked}
 
-        # AI context: Event fields + KG relations — never raw posts
+        # Prefer fresher + multi-source events in AI context (top 6 only, lean summaries)
+        ranked_for_ai = sorted(
+            ranked,
+            key=lambda r: (
+                float(r.event.sources_count or 0),
+                float(r.freshness or 0),
+                float(r.score),
+            ),
+            reverse=True,
+        )[:6]
+
         contexts: list[tuple[int, str, str]] = []
-        for r in ranked:
+        for r in ranked_for_ai:
             ev = r.event
-            nodes = await self._kg.nodes_for_event(ev.id)
-            rel = ", ".join(n.name for n in nodes[:8])
-            timeline = ""
-            if deep and ev.timeline:
-                try:
-                    parts = []
-                    for entry in (ev.timeline or [])[-5:]:
-                        if isinstance(entry, dict):
-                            parts.append(str(entry.get("text") or entry.get("kind") or ""))
-                    timeline = " | ".join(p for p in parts if p)
-                except Exception:
-                    timeline = ""
-            summary = ev.summary
-            if rel:
-                summary = f"{summary}\nKG: {rel}"
-            if timeline:
-                summary = f"{summary}\nTimeline: {timeline}"
-            if ev.why_important:
-                summary = f"{summary}\nWhy: {ev.why_important}"
+            summary = (ev.summary or "")[:600]
             contexts.append((ev.id, ev.title, summary))
 
-        answer = await self._ai.answer_question(query, contexts)
-        await log_ai_usage(
-            self._session,
-            provider=getattr(self._ai, "provider_name", "unknown"),
-            operation="answer_question",
-        )
+        from app.config import get_settings
+        from app.services.ai.usage import log_call_meta
+        from app.services.redis_client import cache_get, cache_set
+        import hashlib
+
+        settings = get_settings()
+        cache_key = None
+        if settings.ai_search_synthesis:
+            scope = ",".join(str(e.id) for e in ranked_for_ai)
+            digest = hashlib.sha256(f"{query}|{lang}|{scope}".encode()).hexdigest()[:24]
+            cache_key = f"search:{digest}"
+            cached = await cache_get(cache_key)
+            if isinstance(cached, dict) and cached.get("answer"):
+                answer_text = str(cached["answer"])
+                used = [int(x) for x in (cached.get("used_ids") or []) if str(x).isdigit()]
+                used_events = [event_map[i] for i in used if i in event_map]
+                if used_events or not cached.get("relevant", True):
+                    return SearchResult(
+                        answer=answer_text if cached.get("relevant", True) else empty,
+                        hits=[
+                            SearchHit(
+                                news_id=e.id,
+                                score=round(10.0, 2),
+                                title=e.title,
+                                summary=e.summary,
+                            )
+                            for e in used_events
+                        ],
+                        events=used_events,
+                        external_count=external_count,
+                        intent=intent.intent.value,
+                        matched_nodes=node_names,
+                        related_questions=related_questions(query, node_names, lang=lang),
+                        deep=deep,
+                    )
+
+        if not settings.ai_search_synthesis:
+            from app.services.ai.heuristic import HeuristicAIService
+
+            answer = await HeuristicAIService().answer_question(query, contexts)
+        else:
+            answer = await self._ai.answer_question(query, contexts)
+            meta = getattr(self._ai, "last_meta", None)
+            await log_call_meta(
+                self._session,
+                meta,
+                user_id=user.id if user else None,
+                operation="answer_question",
+            )
+            if meta is None:
+                await log_ai_usage(
+                    self._session,
+                    provider=getattr(self._ai, "provider_name", "unknown"),
+                    operation="answer_question",
+                    user_id=user.id if user else None,
+                )
+
+        if cache_key and settings.ai_search_synthesis:
+            ttl = max(3600, int(settings.ai_cache_ttl_days or 30) * 86400)
+            await cache_set(
+                cache_key,
+                {
+                    "answer": answer.answer,
+                    "relevant": answer.relevant,
+                    "used_ids": list(answer.used_event_ids),
+                },
+                ttl_seconds=ttl,
+            )
 
         hits = [
             SearchHit(

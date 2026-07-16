@@ -7,11 +7,10 @@ __pycache__/
 .venv/
 venv/
 env/
+# Secrets — only .env.production on the VPS (never commit)
 .env
 .env.local
 .env.production
-!.env.example
-!.env.local.example
 !.env.production.example
 *.egg-info/
 dist/

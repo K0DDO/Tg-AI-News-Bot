@@ -1,4 +1,4 @@
-"""Factory for AIService implementations."""
+"""Factory for AIService / AIManager."""
 
 from __future__ import annotations
 
@@ -7,9 +7,8 @@ from functools import lru_cache
 
 from app.config import get_settings
 from app.services.ai.base import AIService
-from app.services.ai.groq_client import GroqClient
-from app.services.ai.groq_service import GroqAIService
 from app.services.ai.heuristic import HeuristicAIService
+from app.services.ai.manager import AIManager, build_manager_from_settings
 
 logger = logging.getLogger(__name__)
 
@@ -22,21 +21,19 @@ def create_ai_service() -> AIService:
         logger.info("AI provider: heuristic")
         return HeuristicAIService()
 
-    if provider == "groq":
-        if not settings.groq_api_key:
-            logger.warning("AI_PROVIDER=groq but GROQ_API_KEY empty — using heuristic")
-            return HeuristicAIService()
-        client = GroqClient(
-            api_key=settings.groq_api_key,
-            model=settings.groq_model,
-            base_url=settings.groq_base_url,
-            timeout=settings.groq_timeout_seconds,
-        )
-        logger.info("AI provider: groq model=%s", settings.groq_model)
-        return GroqAIService(client)
+    # hybrid / groq / kimi / auto → manager with available keys
+    manager = build_manager_from_settings(settings)
+    if manager.groq_key_count == 0 and manager.kimi_key_count == 0:
+        logger.warning("No GROQ/KIMI API keys configured — using heuristic")
+        return HeuristicAIService()
 
-    logger.warning("Unknown AI_PROVIDER=%s — using heuristic", provider)
-    return HeuristicAIService()
+    logger.info(
+        "AI provider: manager groq_keys=%s kimi_keys=%s mode=%s",
+        manager.groq_key_count,
+        manager.kimi_key_count,
+        provider,
+    )
+    return manager
 
 
 @lru_cache
@@ -46,3 +43,8 @@ def get_ai_service() -> AIService:
 
 def reset_ai_service_cache() -> None:
     get_ai_service.cache_clear()
+
+
+def get_ai_manager() -> AIManager | None:
+    svc = get_ai_service()
+    return svc if isinstance(svc, AIManager) else None
