@@ -68,7 +68,11 @@ class EventPipeline:
         self._scorer = scorer or ImportanceScorer()
         self._news_det = NewsDetectionService()
         self._ad_det = AdvertisementDetectionService()
-        self._merge = EventMergeService(self._embedding, threshold=settings.cluster_similarity_threshold)
+        self._merge = EventMergeService(
+            self._embedding,
+            threshold=settings.cluster_similarity_threshold,
+            time_window_hours=settings.event_merge_time_window_hours,
+        )
         self._timeline = TimelineService()
         self._lookback_hours = settings.cluster_lookback_hours
 
@@ -111,6 +115,7 @@ class EventPipeline:
             raw_emb,
             candidates,
             entities=light_ents or None,
+            created_at=message.published_at,
         )
         if not assignment.is_new and assignment.news_id is not None:
             event = await self._attach(
@@ -182,6 +187,9 @@ class EventPipeline:
             event_emb,
             candidates,
             entities=entities,
+            keywords=list(analysis.keywords),
+            category=analysis.category,
+            created_at=message.published_at,
         )
         if not assignment.is_new and assignment.news_id is not None:
             event = await self._attach(
@@ -325,7 +333,7 @@ class EventPipeline:
             .where(Event.status == "active")
             .where(Event.updated_at >= since)
             .order_by(Event.updated_at.desc())
-            .limit(200)
+            .limit(400)
         )
         events = list(result.scalars().all())
         candidates: list[ClusterCandidate] = []
@@ -346,6 +354,9 @@ class EventPipeline:
                     summary=event.summary,
                     embedding=vector,
                     entities=list(event.entities or []),
+                    keywords=list(event.keywords or []),
+                    category=event.category,
+                    created_at=event.created_at,
                 )
             )
         return candidates

@@ -267,5 +267,6 @@
   "theme_science": "Science",
   "theme_politics": "Politics",
   "theme_other": "Misc",
-  "privacy_body": "We store: Telegram ID, channels, reactions, reading history, settings.\\nUsed only to personalize your feed. Not sold to third parties.\\nYou can reset reactions or delete your account and associated data yourself at any time in Settings → Delete account."
+  "privacy_body": "We store: Telegram ID, channels, reactions, reading history, settings.\\nUsed only to personalize your feed. Not sold to third parties.\\nYou can reset reactions or delete your account and associated data yourself at any time in Settings → Delete account.",
+  "sources_confirm": "sources confirm this event"
 }

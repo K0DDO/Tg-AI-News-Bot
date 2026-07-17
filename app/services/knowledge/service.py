@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Edge, Event, EventNode, Node
@@ -388,12 +388,39 @@ class KnowledgeGraphService:
         return list(result.scalars().all())
 
     async def _update_related_events(self, event: Event, node_ids: list[int]) -> None:
-        related = await self.event_ids_for_nodes(node_ids, limit=80)
-        related.discard(event.id)
-        # keep top by shared — store ids on Event.related_event_ids
-        top = list(related)[:12]
+        if not node_ids:
+            event.related_event_ids = []
+            return
+        # Rank peers by number of shared nodes (true relatedness)
+        rows = list(
+            (
+                await self._session.execute(
+                    select(EventNode.event_id, func.count())
+                    .where(EventNode.node_id.in_(node_ids))
+                    .where(EventNode.event_id != event.id)
+                    .group_by(EventNode.event_id)
+                    .order_by(func.count().desc())
+                    .limit(24)
+                )
+            ).all()
+        )
+        # Keep only active events
+        ranked_ids = [int(eid) for eid, _cnt in rows]
+        if not ranked_ids:
+            event.related_event_ids = []
+            return
+        active = list(
+            (
+                await self._session.execute(
+                    select(Event.id)
+                    .where(Event.id.in_(ranked_ids))
+                    .where(Event.status == "active")
+                )
+            ).scalars().all()
+        )
+        active_set = set(int(x) for x in active)
+        top = [eid for eid in ranked_ids if eid in active_set][:12]
         event.related_event_ids = top
-        # bidirectional light update for a few peers
         for rid in top[:5]:
             peer = await self._session.get(Event, rid)
             if not peer:

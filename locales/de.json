@@ -267,5 +267,6 @@
   "theme_science": "Wissenschaft",
   "theme_politics": "Politik",
   "theme_other": "Sonstiges",
-  "privacy_body": "Wir speichern: Telegram-ID, Kanäle, Reaktionen, Leseverlauf, Einstellungen.\\nNur zur Personalisierung. Kein Verkauf an Dritte.\\nReaktionen zurücksetzen oder Konto löschen: Einstellungen → Konto löschen."
+  "privacy_body": "Wir speichern: Telegram-ID, Kanäle, Reaktionen, Leseverlauf, Einstellungen.\\nNur zur Personalisierung. Kein Verkauf an Dritte.\\nReaktionen zurücksetzen oder Konto löschen: Einstellungen → Konto löschen.",
+  "sources_confirm": "Quellen bestätigen das Ereignis"
 }

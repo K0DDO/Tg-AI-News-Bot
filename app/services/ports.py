@@ -29,6 +29,9 @@ class ClusterCandidate:
     summary: str
     embedding: Sequence[float] | None = None
     entities: Sequence[str] | None = None
+    keywords: Sequence[str] | None = None
+    category: str | None = None
+    created_at: object | None = None  # datetime | None — keep loose for ports
 
 
 @dataclass(frozen=True, slots=True)

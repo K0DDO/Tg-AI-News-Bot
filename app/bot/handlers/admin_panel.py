@@ -1104,31 +1104,186 @@ async def admin_graph_menu(
         raise SkipHandler()
     from sqlalchemy import func, select
 
-    from app.models import Edge, Node
+    from app.models import Edge, Event, EventNode, Node
+    from app.services.knowledge import get_rebuild_progress
 
     nodes = await session.scalar(select(func.count()).select_from(Node)) or 0
     edges = await session.scalar(select(func.count()).select_from(Edge)) or 0
+    links = await session.scalar(select(func.count()).select_from(EventNode)) or 0
+    active = await session.scalar(
+        select(func.count()).select_from(Event).where(Event.status == "active")
+    ) or 0
+    merged = await session.scalar(
+        select(func.count()).select_from(Event).where(Event.status == "merged")
+    ) or 0
+    progress = get_rebuild_progress()
+    bar = _progress_bar(progress.percent)
+    status_map = {
+        "idle": "⏸ idle",
+        "running": "🔄 running",
+        "stopping": "⏹ stopping",
+        "done": "✅ done",
+        "error": "❌ error",
+        "cancelled": "⏹ cancelled",
+    }
+    last = progress.finished_at or progress.started_at or "—"
     text = (
-        "<b>🕸 Knowledge Graph</b>\n\n"
+        "<b>🕸 Граф новостей</b>\n\n"
+        f"Статус: <b>{status_map.get(progress.status, progress.status)}</b>\n"
+        f"Последняя пересборка: <code>{last}</code>\n"
+        f"{progress.message}\n\n"
+        f"{bar} <b>{progress.percent}%</b>\n"
+        f"Обработано: <b>{progress.processed}</b> / <b>{progress.total or '—'}</b>\n"
+        f"Объединено: <b>{progress.merged}</b>\n"
+        f"Уникальных событий: <b>{progress.unique_events or active}</b>\n"
+        f"Дублей найдено: <b>{progress.duplicates_found}</b>\n\n"
         f"Узлов: <b>{nodes}</b>\n"
-        f"Связей: <b>{edges}</b>\n\n"
-        "Пересборка: decay, удаление битых/orphan Topic, merge дублей, backfill связей."
+        f"Связей: <b>{edges}</b>\n"
+        f"Event↔Node: <b>{links}</b>\n"
+        f"Active events: <b>{active}</b>\n"
+        f"Merged events: <b>{merged}</b>\n\n"
+        "«Пересобрать граф» полностью очищает связи, объединяет дубли событий "
+        "и строит граф заново."
     )
+    rows: list[list[InlineKeyboardButton]] = []
+    if progress.status == "running":
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🔄 Обновить статус",
+                    callback_data="adm:kg:status",
+                ),
+                InlineKeyboardButton(
+                    text="⏹ Остановить",
+                    callback_data="adm:kg:stop",
+                ),
+            ]
+        )
+    else:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🕸 Пересобрать граф",
+                    callback_data="adm:kg:rebuild",
+                )
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🔄 Обновить статус",
+                    callback_data="adm:kg:status",
+                )
+            ]
+        )
     await _admin_answer(
         message,
         state,
         text,
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="🕸 Обновить граф",
-                        callback_data="adm:kg:rebuild",
-                    )
-                ]
-            ]
-        ),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
+
+
+def _progress_bar(percent: int, width: int = 10) -> str:
+    p = max(0, min(100, int(percent)))
+    filled = int(round(width * p / 100))
+    return "█" * filled + "░" * (width - filled)
+
+
+async def _graph_status_text(session: AsyncSession) -> str:
+    from sqlalchemy import func, select
+
+    from app.models import Edge, Event, EventNode, Node
+    from app.services.knowledge import get_rebuild_progress
+
+    nodes = await session.scalar(select(func.count()).select_from(Node)) or 0
+    edges = await session.scalar(select(func.count()).select_from(Edge)) or 0
+    links = await session.scalar(select(func.count()).select_from(EventNode)) or 0
+    active = await session.scalar(
+        select(func.count()).select_from(Event).where(Event.status == "active")
+    ) or 0
+    merged = await session.scalar(
+        select(func.count()).select_from(Event).where(Event.status == "merged")
+    ) or 0
+    progress = get_rebuild_progress()
+    bar = _progress_bar(progress.percent)
+    return (
+        "<b>🕸 Граф новостей</b>\n\n"
+        f"Статус: <b>{progress.status}</b>\n"
+        f"{progress.message}\n\n"
+        f"{bar} <b>{progress.percent}%</b>\n"
+        f"Обработано: <b>{progress.processed}</b> / <b>{progress.total or '—'}</b>\n"
+        f"Объединено: <b>{progress.merged}</b>\n"
+        f"Уникальных событий: <b>{progress.unique_events or active}</b>\n"
+        f"Дублей: <b>{progress.duplicates_found}</b>\n"
+        f"Связано events: <b>{progress.linked_events}</b>\n\n"
+        f"Узлов: <b>{nodes}</b> · Связей: <b>{edges}</b> · Links: <b>{links}</b>\n"
+        f"Active: <b>{active}</b> · Merged: <b>{merged}</b>"
+    )
+
+
+def _graph_keyboard() -> InlineKeyboardMarkup:
+    from app.services.knowledge import get_rebuild_progress
+
+    progress = get_rebuild_progress()
+    rows: list[list[InlineKeyboardButton]] = []
+    if progress.status == "running":
+        rows.append(
+            [
+                InlineKeyboardButton(text="🔄 Статус", callback_data="adm:kg:status"),
+                InlineKeyboardButton(text="⏹ Стоп", callback_data="adm:kg:stop"),
+            ]
+        )
+    else:
+        rows.append(
+            [InlineKeyboardButton(text="🕸 Пересобрать граф", callback_data="adm:kg:rebuild")]
+        )
+        rows.append(
+            [InlineKeyboardButton(text="🔄 Статус", callback_data="adm:kg:status")]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data == "adm:kg:status")
+async def admin_kg_status(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await callback.answer()
+    text = await _graph_status_text(session)
+    if callback.message:
+        try:
+            await callback.message.edit_text(text, reply_markup=_graph_keyboard())
+        except TelegramBadRequest:
+            await _admin_answer(callback.message, state, text, reply_markup=_graph_keyboard())
+
+
+@router.callback_query(F.data == "adm:kg:stop")
+async def admin_kg_stop(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    db_user: User,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(session, db_user, state):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    from app.services.knowledge import request_stop_rebuild
+
+    ok = request_stop_rebuild()
+    await callback.answer("Останавливаем…" if ok else "Не запущено", show_alert=True)
+    if callback.message:
+        text = await _graph_status_text(session)
+        try:
+            await callback.message.edit_text(text, reply_markup=_graph_keyboard())
+        except TelegramBadRequest:
+            pass
+    record_admin_log("INFO", f"KG rebuild stop by={db_user.id}")
 
 
 @router.callback_query(F.data == "adm:kg:rebuild")
@@ -1141,23 +1296,21 @@ async def admin_kg_rebuild(
     if not await _require_admin(session, db_user, state):
         await callback.answer("Нет доступа", show_alert=True)
         return
-    await callback.answer("Запущено…")
-    from app.services.knowledge import KnowledgeGraphService
+    from app.services.knowledge import get_rebuild_progress, start_full_rebuild
 
-    stats = await KnowledgeGraphService(session).rebuild_maintenance()
-    record_admin_log("INFO", f"KG rebuild by={db_user.id} stats={stats}")
-    text = (
-        "<b>🕸 Граф обновлён</b>\n\n"
-        f"Старых узлов: <b>{stats.get('old_nodes', 0)}</b>\n"
-        f"Новых: <b>{stats.get('new_nodes', 0)}</b>\n"
-        f"Удалено: <b>{stats.get('deleted', 0)}</b>\n"
-        f"Исправлено: <b>{stats.get('fixed', 0)}</b>\n"
-        f"Merge дублей: <b>{stats.get('merged_duplicates', 0)}</b>\n"
-        f"Backfill events: <b>{stats.get('backfilled_events', 0)}</b>\n"
-        f"Decay edges: <b>{stats.get('decayed', 0)}</b>"
-    )
+    current = get_rebuild_progress()
+    if current.status == "running":
+        await callback.answer("Уже идёт пересборка", show_alert=True)
+        return
+    await callback.answer("Полная пересборка запущена…")
+    await start_full_rebuild()
+    record_admin_log("INFO", f"KG full rebuild started by={db_user.id}")
+    text = await _graph_status_text(session)
     if callback.message:
-        await callback.message.edit_text(text)
+        try:
+            await callback.message.edit_text(text, reply_markup=_graph_keyboard())
+        except TelegramBadRequest:
+            await _admin_answer(callback.message, state, text, reply_markup=_graph_keyboard())
 
 
 @router.message(AdminAuthStates.menu, F.text == BTN_AI)

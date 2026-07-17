@@ -267,5 +267,6 @@
   "theme_science": "Ciencia",
   "theme_politics": "Política",
   "theme_other": "Varios",
-  "privacy_body": "Guardamos: ID de Telegram, canales, reacciones, historial y ajustes.\\nSolo para personalizar el feed. No se vende a terceros.\\nPuedes restablecer reacciones o eliminar tu cuenta en Ajustes → Eliminar cuenta."
+  "privacy_body": "Guardamos: ID de Telegram, canales, reacciones, historial y ajustes.\\nSolo para personalizar el feed. No se vende a terceros.\\nPuedes restablecer reacciones o eliminar tu cuenta en Ajustes → Eliminar cuenta.",
+  "sources_confirm": "fuentes confirman el evento"
 }

@@ -267,5 +267,6 @@
   "theme_science": "科学",
   "theme_politics": "政治",
   "theme_other": "其他",
-  "privacy_body": "我们存储：Telegram ID、频道、反应、阅读历史、设置。\\n仅用于个性化信息流，不出售给第三方。\\n可随时在 设置 → 删除账户 中自行重置反应或删除账户及相关数据。"
+  "privacy_body": "我们存储：Telegram ID、频道、反应、阅读历史、设置。\\n仅用于个性化信息流，不出售给第三方。\\n可随时在 设置 → 删除账户 中自行重置反应或删除账户及相关数据。",
+  "sources_confirm": "sources confirm this event"
 }

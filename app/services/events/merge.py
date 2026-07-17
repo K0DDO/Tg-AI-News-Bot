@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 
 from app.services.clustering import CosineClusterer, cosine_similarity
+from app.services.events.similarity import should_merge, similarity_score
 from app.services.ports import ClusterCandidate, ClusterResult, EmbeddingPort
 
 _NORM = re.compile(r"[^\w]+", re.UNICODE)
@@ -82,13 +84,26 @@ def is_near_duplicate(a: str, b: str, *, threshold: float = 0.30) -> bool:
     overlap = len(shared) / len(left | right)
     if overlap >= threshold:
         return True
-    # Same brand + promo wave (e.g. Rostic's + minions + combo + July)
     if len(shared) >= 3 and overlap >= 0.22:
         return True
-    # Strong token containment (one title is a paraphrase of the other)
     if shared and min(len(left), len(right)) >= 3:
         smaller = left if len(left) <= len(right) else right
         if len(shared) / len(smaller) >= 0.72:
+            return True
+    # Distinctive multi-brand overlap (MAX + Google, Apple + MacBook, …)
+    if len(shared) >= 2:
+        blob = f"{a} {b}".lower()
+        removal = any(
+            x in blob
+            for x in (
+                "удал", "убрал", "исчез", "unavailable", "removed", "banned",
+                "delete", "запрет", "недоступ",
+            )
+        )
+        store = any(x in blob for x in ("google", "play", "store", "магазин", "app store"))
+        if removal and store and ("max" in shared or "макс" in shared):
+            return True
+        if len(shared) >= 2 and removal and overlap >= 0.12:
             return True
     return False
 
@@ -118,23 +133,25 @@ def light_entities_from_text(text: str, *, limit: int = 12) -> list[str]:
 
 class EventMergeService:
     """
-    Find similar Events by embedding + lexical overlap + entity gate.
-    Cost: no LLM — only local cosine / token Jaccard.
+    Find similar Events via composite similarity_score:
+    embedding 60% + entities 20% + keywords 10% + time 10%.
     """
 
     def __init__(
         self,
         embedding: EmbeddingPort,
         *,
-        threshold: float = 0.85,
+        threshold: float = 0.72,
         clusterer: CosineClusterer | None = None,
+        time_window_hours: float = 72.0,
     ) -> None:
         self._embedding = embedding
-        # Hashing embeddings are noisier than transformers — auto-relax threshold.
         backend = getattr(embedding, "backend", None) or embedding.__class__.__name__.lower()
-        if "hash" in str(backend).lower() and threshold > 0.55:
-            threshold = min(threshold, 0.45)
-        self._threshold = threshold
+        # Hashing embeddings are noisier — slightly lower merge bar.
+        if "hash" in str(backend).lower() and threshold > 0.52:
+            threshold = min(threshold, 0.52)
+        self._threshold = float(threshold)
+        self._time_window_hours = float(time_window_hours)
         self._clusterer = clusterer or CosineClusterer()
 
     def embed_event_text(
@@ -155,20 +172,69 @@ class EventMergeService:
         candidates: list[ClusterCandidate],
         *,
         entities: list[str] | None = None,
+        keywords: list[str] | None = None,
+        category: str | None = None,
+        created_at: datetime | None = None,
     ) -> ClusterResult:
-        result = self._clusterer.assign(text, embedding, candidates, self._threshold)
-        if not result.is_new and result.news_id is not None:
+        """Pick best semantic match by composite score (not cosine alone)."""
+        now = created_at or datetime.now(timezone.utc)
+        best_id: int | None = None
+        best_score = 0.0
+
+        for cand in candidates:
+            blob = f"{cand.title}\n{cand.summary}"
+            # Cheap prefilter — skip clearly unrelated
+            if (
+                content_overlap(text, blob) < 0.12
+                and not is_near_duplicate(text, blob)
+                and not entities_overlap(entities, list(cand.entities or []) or None)
+            ):
+                # Still allow pure embedding hits
+                try:
+                    raw_sim = (
+                        float(cosine_similarity(embedding, list(cand.embedding)))
+                        if cand.embedding
+                        else 0.0
+                    )
+                except Exception:
+                    raw_sim = 0.0
+                if raw_sim < 0.55:
+                    continue
+
+            cand_time = cand.created_at if isinstance(cand.created_at, datetime) else None
+            breakdown = similarity_score(
+                embedding_a=embedding,
+                embedding_b=list(cand.embedding) if cand.embedding else None,
+                entities_a=entities,
+                entities_b=list(cand.entities or []) or None,
+                keywords_a=keywords,
+                keywords_b=list(cand.keywords or []) or None,
+                text_a=text,
+                text_b=blob,
+                time_a=now,
+                time_b=cand_time,
+                category_a=category,
+                category_b=cand.category,
+                time_window_hours=self._time_window_hours,
+            )
+            near = is_near_duplicate(text, blob)
+            score = breakdown.total
+            if near:
+                score = max(score, self._threshold)
+            if score > best_score:
+                best_score = score
+                best_id = cand.news_id
+
+        if best_id is not None and should_merge(best_score, threshold=self._threshold):
+            return ClusterResult(news_id=best_id, similarity=best_score, is_new=False)
+
+        # Legacy cosine path as last resort for high embed similarity
+        result = self._clusterer.assign(text, embedding, candidates, max(self._threshold, 0.85))
+        if not result.is_new and result.news_id is not None and result.similarity >= 0.90:
             if self._entity_ok(result.news_id, candidates, entities):
                 return result
-            soft = self._soft_lexical_match(text, embedding, candidates, entities=entities)
-            if soft is not None:
-                return soft
-            return ClusterResult(news_id=None, similarity=result.similarity, is_new=True)
 
-        soft = self._soft_lexical_match(text, embedding, candidates, entities=entities)
-        if soft is not None:
-            return soft
-        return result
+        return ClusterResult(news_id=None, similarity=best_score, is_new=True)
 
     def _entity_ok(
         self,
@@ -185,40 +251,3 @@ class EventMergeService:
         if not cand_entities:
             cand_entities = [matched.title, matched.summary]
         return entities_overlap(entities, cand_entities)
-
-    def _soft_lexical_match(
-        self,
-        text: str,
-        embedding: list[float],
-        candidates: list[ClusterCandidate],
-        *,
-        entities: list[str] | None = None,
-    ) -> ClusterResult | None:
-        """Catch near-duplicates the embedder misses (same promo, different wording)."""
-        best_id: int | None = None
-        best_score = 0.0
-        for cand in candidates:
-            blob = f"{cand.title}\n{cand.summary}"
-            overlap = content_overlap(text, blob)
-            if overlap < 0.24 and not is_near_duplicate(text, blob):
-                continue
-            try:
-                sim = float(cosine_similarity(embedding, list(cand.embedding))) if cand.embedding else 0.0
-            except Exception:
-                sim = 0.0
-            ent_ok = True
-            if entities:
-                cand_ents = list(cand.entities or []) or [cand.title, cand.summary]
-                ent_ok = entities_overlap(entities, cand_ents)
-            score = overlap * 0.65 + sim * 0.35
-            near = is_near_duplicate(text, blob)
-            # Strong near-dupe bypasses entity gate (paraphrases of same story)
-            if near or overlap >= 0.42 or (overlap >= 0.28 and sim >= 0.50 and ent_ok) or (
-                overlap >= 0.32 and ent_ok and sim >= 0.40
-            ) or (sim >= 0.85 and (near or overlap >= 0.20)):
-                if score > best_score or (near and best_id is None):
-                    best_score = max(score, 0.55 if near else score)
-                    best_id = cand.news_id
-        if best_id is None:
-            return None
-        return ClusterResult(news_id=best_id, similarity=best_score, is_new=False)

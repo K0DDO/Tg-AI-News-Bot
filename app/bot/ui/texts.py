@@ -150,18 +150,36 @@ def format_news_detail(
             tz_name=tz_name,
         )
     )
+    cat_label = theme_display(normalize_category(brief.category))
+    lines.append(f"📡 {brief.sources_count} {t(lang, 'sources_n')}")
+    lines.append(f"📂 {escape(cat_label)}")
+    if brief.sources_count >= 2:
+        lines.append(
+            f"✅ {brief.sources_count} {t(lang, 'sources_confirm')}"
+        )
     if brief.topic:
         lines.append(f"🏷 {escape(brief.topic)}")
     if brief.updated:
         lines.append("")
         lines.append(f"📈 {t(lang, 'updated_badge')}: {brief.sources_count} {t(lang, 'sources_n')}")
     if related:
-        lines.append("")
-        lines.append(f"<b>{t(lang, 'related_events')}</b>")
-        for ev in related[:4]:
-            lines.append(f"• {escape(normalize_title(ev.title))}")
-    return "\n".join(lines)
+        # Drop near-duplicates of the main story from "related"
+        from app.services.events.merge import is_near_duplicate
 
+        main_blob = f"{brief.title}\n{brief.summary}"
+        clean_related = []
+        for ev in related[:8]:
+            if is_near_duplicate(main_blob, f"{ev.title or ''}\n{ev.summary or ''}"):
+                continue
+            clean_related.append(ev)
+            if len(clean_related) >= 4:
+                break
+        if clean_related:
+            lines.append("")
+            lines.append(f"<b>{t(lang, 'related_events')}</b>")
+            for ev in clean_related:
+                lines.append(f"• {escape(normalize_title(ev.title))}")
+    return "\n".join(lines)
 
 def format_why(lang: str, news: Event | Brief) -> str:
     brief = news if isinstance(news, Brief) else to_brief(news, lang)
