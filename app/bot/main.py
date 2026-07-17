@@ -32,8 +32,8 @@ async def run_bot() -> None:
     )
     dp = Dispatcher(storage=await create_fsm_storage())
     dp.update.middleware(DbUserMiddleware())
+    # Only on user messages — never on callback_query (those are bot inline UIs)
     dp.message.middleware(CleanChatMiddleware())
-    dp.callback_query.middleware(CleanChatMiddleware())
     dp.include_router(setup_routers())
 
     logger.info("Bot polling started")

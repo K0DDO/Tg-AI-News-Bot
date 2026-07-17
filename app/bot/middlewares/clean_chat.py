@@ -1,4 +1,7 @@
-"""Delete reply-keyboard action presses so the chat stays clean."""
+"""Delete the user's reply-keyboard presses so the chat stays clean.
+
+Never deletes the bot's own messages / inline keyboards.
+"""
 
 from __future__ import annotations
 
@@ -8,14 +11,15 @@ from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import CallbackQuery, Message, TelegramObject
+from aiogram.types import Message, TelegramObject
 
-# Short pause before deleting button presses — feels smoother than instant wipe.
+# Short pause before deleting — feels smoother than an instant wipe.
 _DELETE_DELAY_SEC = 0.55
 
 
 @lru_cache(maxsize=1)
 def _reply_action_texts() -> frozenset[str]:
+    """Exact texts of reply-keyboard buttons (user messages only)."""
     from app.bot.i18n import (
         SUPPORTED_LANGS,
         btn_channels,
@@ -40,7 +44,7 @@ def _reply_action_texts() -> frozenset[str]:
                 btn_history(lang),
             }
         )
-    # Admin reply keyboard (Russian labels — admin UI is RU-only)
+    # Admin reply keyboard (RU-only)
     texts.update(
         {
             "📊 Статистика",
@@ -60,8 +64,24 @@ def _reply_action_texts() -> frozenset[str]:
     return frozenset(texts)
 
 
-async def _safe_delete_message(message: Message | None) -> None:
+def _is_user_reply_button(message: Message) -> bool:
+    """True only for the user's own reply-keyboard press — never a bot message."""
+    user = message.from_user
+    if user is None or user.is_bot:
+        return False
+    # Bot UI screens are messages from the bot; ignore anything that isn't plain text
+    # from a human matching a known reply button label.
+    if message.reply_markup is not None:
+        return False
+    text = (message.text or "").strip()
+    return bool(text) and text in _reply_action_texts()
+
+
+async def _safe_delete_user_message(message: Message | None) -> None:
     if message is None:
+        return
+    # Extra safety: never delete a message authored by the bot.
+    if message.from_user is not None and message.from_user.is_bot:
         return
     try:
         await message.delete()
@@ -76,17 +96,17 @@ async def _delete_later(message: Message | None, delay: float = _DELETE_DELAY_SE
         return
     try:
         await asyncio.sleep(delay)
-        await _safe_delete_message(message)
+        await _safe_delete_user_message(message)
     except Exception:
         pass
 
 
 class CleanChatMiddleware(BaseMiddleware):
     """
-    Keep action presses out of chat history:
-    - reply-keyboard presses → after bot replies, wait briefly, then delete
-    - inline callbacks → delete the pressed message if UI moved elsewhere
-      or if the handler set data['drop_callback_message']=True
+    After handling, soft-delete ONLY the user's reply-keyboard press
+    (e.g. «📰 Лента», «⚙️ Настройки»).
+
+    Bot messages and inline keyboards are never touched.
     """
 
     async def __call__(
@@ -95,35 +115,14 @@ class CleanChatMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        if isinstance(event, Message):
-            text = (event.text or "").strip()
-            is_action = bool(text and text in _reply_action_texts())
-            result = await handler(event, data)
-            if is_action and not data.get("keep_user_message"):
-                # Don't block the reply — fade the button press out shortly after.
-                asyncio.create_task(_delete_later(event))
-            return result
-
         result = await handler(event, data)
 
         if data.get("keep_user_message"):
             return result
 
-        if isinstance(event, CallbackQuery) and event.message is not None:
-            if data.get("drop_callback_message"):
-                asyncio.create_task(_delete_later(event.message))
-                return result
+        # Only Message events from the user pressing a reply button.
+        # CallbackQuery events attach to the bot's message — do not delete those.
+        if isinstance(event, Message) and _is_user_reply_button(event):
+            asyncio.create_task(_delete_later(event))
 
-            session = data.get("session")
-            db_user = data.get("db_user")
-            if session is not None and db_user is not None:
-                try:
-                    from app.services.preferences import PreferencesService
-
-                    _, ui_msg_id = await PreferencesService(session).get_ui_message(db_user)
-                    pressed_id = int(event.message.message_id)
-                    if ui_msg_id and int(ui_msg_id) != pressed_id:
-                        asyncio.create_task(_delete_later(event.message))
-                except Exception:
-                    pass
         return result
