@@ -13,7 +13,7 @@ from aiogram.enums import ParseMode
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.bot.handlers import setup_routers
-from app.bot.middlewares import DbUserMiddleware
+from app.bot.middlewares import CleanChatMiddleware, DbUserMiddleware
 from app.config import get_settings
 from app.health import record_admin_log, record_error, record_ingest, set_scheduler_running
 from app.logging_setup import setup_logging
@@ -131,6 +131,7 @@ async def run() -> None:
     )
     dp = Dispatcher(storage=storage)
     dp.update.middleware(DbUserMiddleware())
+    dp.update.middleware(CleanChatMiddleware())
     dp.include_router(setup_routers())
 
     scheduler = await _start_scheduler(settings)
