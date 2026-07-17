@@ -69,9 +69,9 @@ async def _safe_delete_message(message: Message | None) -> None:
 
 class CleanChatMiddleware(BaseMiddleware):
     """
-    After a handler finishes:
-    - reply-keyboard presses → delete the user's button message
-    - inline callbacks → delete the pressed message if UI moved elsewhere
+    Keep action presses out of chat history:
+    - reply-keyboard presses -> delete the user's button message immediately
+    - inline callbacks -> delete the pressed message if UI moved elsewhere
       or if the handler set data['drop_callback_message']=True
     """
 
@@ -81,15 +81,16 @@ class CleanChatMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        result = await handler(event, data)
-
-        if data.get("keep_user_message"):
-            return result
-
         if isinstance(event, Message):
             text = (event.text or "").strip()
             if text and text in _reply_action_texts():
+                # Delete before handling so the button press never lingers.
                 await _safe_delete_message(event)
+            return await handler(event, data)
+
+        result = await handler(event, data)
+
+        if data.get("keep_user_message"):
             return result
 
         if isinstance(event, CallbackQuery) and event.message is not None:
