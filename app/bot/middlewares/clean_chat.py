@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from functools import lru_cache
 from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, Message, TelegramObject
+
+# Short pause before deleting button presses — feels smoother than instant wipe.
+_DELETE_DELAY_SEC = 0.55
 
 
 @lru_cache(maxsize=1)
@@ -67,11 +71,21 @@ async def _safe_delete_message(message: Message | None) -> None:
         pass
 
 
+async def _delete_later(message: Message | None, delay: float = _DELETE_DELAY_SEC) -> None:
+    if message is None:
+        return
+    try:
+        await asyncio.sleep(delay)
+        await _safe_delete_message(message)
+    except Exception:
+        pass
+
+
 class CleanChatMiddleware(BaseMiddleware):
     """
     Keep action presses out of chat history:
-    - reply-keyboard presses -> delete the user's button message immediately
-    - inline callbacks -> delete the pressed message if UI moved elsewhere
+    - reply-keyboard presses → after bot replies, wait briefly, then delete
+    - inline callbacks → delete the pressed message if UI moved elsewhere
       or if the handler set data['drop_callback_message']=True
     """
 
@@ -83,10 +97,12 @@ class CleanChatMiddleware(BaseMiddleware):
     ) -> Any:
         if isinstance(event, Message):
             text = (event.text or "").strip()
-            if text and text in _reply_action_texts():
-                # Delete before handling so the button press never lingers.
-                await _safe_delete_message(event)
-            return await handler(event, data)
+            is_action = bool(text and text in _reply_action_texts())
+            result = await handler(event, data)
+            if is_action and not data.get("keep_user_message"):
+                # Don't block the reply — fade the button press out shortly after.
+                asyncio.create_task(_delete_later(event))
+            return result
 
         result = await handler(event, data)
 
@@ -95,7 +111,7 @@ class CleanChatMiddleware(BaseMiddleware):
 
         if isinstance(event, CallbackQuery) and event.message is not None:
             if data.get("drop_callback_message"):
-                await _safe_delete_message(event.message)
+                asyncio.create_task(_delete_later(event.message))
                 return result
 
             session = data.get("session")
@@ -107,7 +123,7 @@ class CleanChatMiddleware(BaseMiddleware):
                     _, ui_msg_id = await PreferencesService(session).get_ui_message(db_user)
                     pressed_id = int(event.message.message_id)
                     if ui_msg_id and int(ui_msg_id) != pressed_id:
-                        await _safe_delete_message(event.message)
+                        asyncio.create_task(_delete_later(event.message))
                 except Exception:
                     pass
         return result
